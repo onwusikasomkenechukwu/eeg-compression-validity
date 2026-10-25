@@ -1,0 +1,19 @@
+# Tested with Python 3.12 on Linux (WSL2 Ubuntu). Install PyTorch first, matching your hardware:
+#   CPU only:     pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+#   NVIDIA GPU:   pip install torch==2.14.1   (pick the CUDA build from pytorch.org for your driver)
+#   Windows + AMD/Intel GPU (DirectML): pip install torch-directml==0.2.5.dev240914  (pins torch 2.4.1)
+# then: pip install -r requirements.txt
+numpy==2.5.4
+scipy==1.18.1
+pandas==3.1.0
+scikit-learn==1.9.1
+statsmodels==0.15.0
+matplotlib==3.11.2
+mne==1.13.2
+pyedflib==0.1.42
+wfdb==4.3.1
+timescoring==0.0.7
+epilepsy2bids==0.0.7
+onnx==1.23.2
+onnxruntime==1.31.0
+pytest==9.1.1

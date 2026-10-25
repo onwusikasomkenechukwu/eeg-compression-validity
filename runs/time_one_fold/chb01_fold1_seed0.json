@@ -1,0 +1,82 @@
+{
+  "fold": 1,
+  "seed": 0,
+  "threshold": 0.02271212637424469,
+  "test_records": 6,
+  "val_records": 6,
+  "train_records": 30,
+  "test_hours": 6.0,
+  "seizures_detected": "1/1",
+  "false_alarms": 1,
+  "fa_per_24h": 4.0,
+  "latencies_s": [
+    1.0
+  ],
+  "window_auroc": 0.9998675531773993,
+  "window_auprc": 0.9404761904761902,
+  "window_specificity": 0.9977748933803078,
+  "spec_in_band": true,
+  "per_record": [
+    {
+      "record": "chb01_04.edf",
+      "hours": 1.0,
+      "tp": 1,
+      "fp": 0,
+      "seizures": 1,
+      "latency_s": [
+        1.0
+      ]
+    },
+    {
+      "record": "chb01_02.edf",
+      "hours": 1.0,
+      "tp": 0,
+      "fp": 0,
+      "seizures": 0,
+      "latency_s": []
+    },
+    {
+      "record": "chb01_11.edf",
+      "hours": 1.0,
+      "tp": 0,
+      "fp": 0,
+      "seizures": 0,
+      "latency_s": []
+    },
+    {
+      "record": "chb01_22.edf",
+      "hours": 1.0,
+      "tp": 0,
+      "fp": 1,
+      "seizures": 0,
+      "latency_s": []
+    },
+    {
+      "record": "chb01_31.edf",
+      "hours": 1.0,
+      "tp": 0,
+      "fp": 0,
+      "seizures": 0,
+      "latency_s": []
+    },
+    {
+      "record": "chb01_39.edf",
+      "hours": 1.0,
+      "tp": 0,
+      "fp": 0,
+      "seizures": 0,
+      "latency_s": []
+    }
+  ],
+  "timing": {
+    "load_s": 0.46822341399996503,
+    "windows_s": 0.33750336599996444,
+    "train_s": 220.10166050600003,
+    "epochs": 105,
+    "stopped_early": true,
+    "s_per_epoch": 2.09475373237143,
+    "test_s": 1.730268375000037,
+    "total_s": 223.939571457
+  },
+  "patient": "chb01"
+}
