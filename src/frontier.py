@@ -106,6 +106,18 @@ def excess_latency(ref, other, w0=DEFAULT_SMOOTH):
     return lat - p0["median_latency_s"], w, fa_at_latency(other, p0["median_latency_s"]) - p0["fa_per_24h"]
 
 
+def sensitivity_at_cap(frontier, cap):
+    """Recall under a false-alarm cap (exploratory, prereg/FIDELITY_UPDATE.md item 5): among
+    the smoothing widths whose false alarms per 24 h are at or below `cap`, the one with the
+    most detected seizures (ties: the smaller width). No interpolation, since event counts are
+    discrete. Returns (detected, seizures, smooth_s), or None when no width reaches the cap."""
+    ok = [p for p in frontier if p["fa_per_24h"] <= cap]
+    if not ok:
+        return None
+    best = max(ok, key=lambda p: (p["detected"], -p["smooth_s"]))
+    return best["detected"], best["seizures"], best["smooth_s"]
+
+
 def _median(values):
     """Median that keeps +inf (censored) values; nan (undefined) values are dropped."""
     v = sorted(x for x in values if not math.isnan(x))

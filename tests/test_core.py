@@ -289,3 +289,65 @@ def test_chbmit_counts_and_groups():
     recs = [r for p in chbmit.list_patients(root) for r in chbmit.usable_records(root, p)]
     assert len(recs) == 683 and sum(h for _, h in recs) == 138
     assert sum(len(chbmit.seizures(r)) for r, _ in recs) == 185
+
+
+# --- reimplementation check (EpiDeNet's protocol) and recall at a false-alarm cap -----------------
+
+def test_loocv_seizure_folds_skip_seizure_free_records():
+    from records import loocv_seizure_folds
+    recs = [(f"r{i}", i in (2, 5, 9)) for i in range(12)]
+    assert loocv_seizure_folds(recs) == [["r2"], ["r5"], ["r9"]]
+    with pytest.raises(ValueError):
+        loocv_seizure_folds([("a", True), ("b", False)])
+
+
+def test_stratified_holdout_takes_a_quarter_of_each_class():
+    from pipeline import stratified_holdout
+    y = np.array([1] * 40 + [0] * 400)
+    held = stratified_holdout(y, 0.25, np.random.default_rng(0))
+    assert (held & (y == 1)).sum() == 10 and (held & (y == 0)).sum() == 100
+    assert (held == stratified_holdout(y, 0.25, np.random.default_rng(0))).all()   # the seed fixes it
+
+
+class _TinyDataset:
+    """Three 10 min seizure records and one seizure-free record: noise, plus a strong 8 Hz rhythm
+    during each 60 s seizure."""
+    NAME = "chbmit"
+    RECS = {"s0": [(200.0, 260.0)], "s1": [(300.0, 360.0)], "s2": [(100.0, 160.0)], "free": []}
+
+    @classmethod
+    def load_record(cls, p, cache_root, channels):
+        rng = np.random.default_rng(sorted(cls.RECS).index(p))
+        n = 600 * FS
+        x = rng.normal(0, 10, (4, n))
+        t = np.arange(n) / FS
+        for on, off in cls.RECS[p]:
+            sl = slice(int(on * FS), int(off * FS))
+            x[:, sl] += 60 * np.sin(2 * math.pi * 8 * t[sl])
+        return x.astype(np.float16), cls.RECS[p], 600.0
+
+
+def test_reimplementation_check_runs_epidenet_protocol():
+    from pipeline import run_reimplementation_check
+    from records import loocv_seizure_folds
+    folds = loocv_seizure_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
+    summary, arrays = run_reimplementation_check(folds, 1, None, _TinyDataset, seed=0, threads=1, log=lambda m: None)
+    assert summary["protocol"] == "epidenet" and summary["test_records"] == ["s1"]
+    assert summary["train_records"] == 2                       # the other seizure records, not "free"
+    assert summary["thresholds"] == {"fp32": 0.5}               # default decision, no tuning
+    assert summary["es_seizure_windows"] == round(0.25 * (summary["es_seizure_windows"]
+                                                          + summary["train_seizure_windows"]))
+    e = summary["window"]["fp32"]["epidenet"]                  # the layout sanity_gate.py reads
+    assert e["seizures"] == 1 and e["hours"] == pytest.approx(600 / 3600)
+    assert {"seizures_detected", "fp_per_h_vote"} <= set(e)
+    assert len(arrays["test_fp32"]) == arrays["test_lengths"].sum() == len(arrays["test_labels"])
+
+
+def test_sensitivity_at_cap_picks_best_width_under_the_cap():
+    from frontier import sensitivity_at_cap
+    front = [{"smooth_s": w, "fa_per_24h": fa, "detected": d, "seizures": 10}
+             for w, fa, d in [(4, 9.0, 10), (12, 2.0, 8), (16, 1.0, 8), (20, 0.5, 6), (30, 0.0, 3)]]
+    assert sensitivity_at_cap(front, 2.0) == (8, 10, 12)       # tie on detections: smaller width
+    assert sensitivity_at_cap(front, 0.5) == (6, 10, 20)       # at the cap counts
+    assert sensitivity_at_cap(front, 0.4) == (3, 10, 30)
+    assert sensitivity_at_cap(front[:2], 1.0) is None          # never gets under the cap

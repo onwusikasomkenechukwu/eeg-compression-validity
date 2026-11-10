@@ -24,17 +24,17 @@ The registered gate compared numbers from **this study's protocol** (training on
    - Either way, the result is reported with the failed registered gate and the investigation.
 5. **Added (exploratory): recall at a false-alarm cap.** A missed seizure costs more than a false alarm, but false alarms must stay low enough for human follow-up. For each patient, seed and model, on the existing Stage 0 frontiers (no new training): sensitivity = detected / annotated seizures (SzCORE event scoring) at the smoothing width with the highest sensitivity among those whose false alarms per 24 h are at or below the cap; ties go to the smaller width. No interpolation (event counts are discrete).
    - Caps: 0.5, 1 and 2 false alarms per 24 h.
-   - Reported per model: pooled sensitivity at each cap (all patients' seizures summed, median over seeds); paired change vs the same seed's FP32 (patient bootstrap, 95% interval); the number of patient-seed values where the model, or FP32, cannot reach the cap at any width (reported, not imputed).
+   - Reported per model: pooled sensitivity at each cap (seizures detected over seizures, summed over the patients where the model reaches the cap, per seed; then the median over seeds); paired change vs FP32 (per patient, the median over seeds where both reach the cap of the model's sensitivity minus the same seed's FP32; then the median over patients, with a 95% patient-bootstrap interval); the number of patient-seed values where the model cannot reach the cap at any width (reported, not imputed).
    - Labelled exploratory: Stage 0's frontiers have already been seen, though this quantity has not been computed.
 6. **Reporting the bit widths against hardware.** INT8 is the deployed case (native on Cortex-M with CMSIS-NN, GAP8/GAP9; EpiDeNet's own deployment). Simulated 6- and 4-bit quantize both weights and activations; mainstream microcontrollers have no native arithmetic below 8 bits, so these are reported as stress points that locate where the trade-off starts to move, not as deployment scenarios.
 7. **Not changed:** the primary endpoint, stop rule, thresholds and evaluation of the quantization study.
 
-## Implementation (when you say go)
+## Implementation
 
 - `records.loocv_seizure_folds(records)`: one fold per seizure record; training = the other seizure records; seizure-free records unused.
-- `pipeline.run_reimplementation_check(...)`: FP32 training only, default decision, EpiDeNet's metrics; no quantization, no frontier.
-- `scripts/run_gate_check.py` (138 folds x 3 seeds; FP32 only, so about a third of a Stage 0 job each) and `scripts/sanity_gate.py --protocol epidenet`.
-- `frontier.sensitivity_at_cap(frontier, cap)` and a `--caps` section in `scripts/analyze_stats.py` for item 5.
-- Tests for the fold builder, the default-decision path and the cap selection; a smoke run checked for errors only, with no metrics inspected, before registration.
+- `pipeline.run_reimplementation_check(...)`: FP32 training only, early stopping on `pipeline.stratified_holdout` (25%), default decision (probability > 0.5), EpiDeNet's metrics; no quantization, no frontier.
+- Run: `scripts/run_patient.py --protocol epidenet --patients all --seeds 0 1 2 --workers 2 --threads 4` (138 folds x 3 seeds, output `runs/gate_check`), then `scripts/sanity_gate.py --protocol epidenet`.
+- Item 5: `frontier.sensitivity_at_cap(frontier, cap)`; `scripts/analyze_stats.py --runs runs/stage0 --caps 0.5 1 2` writes `runs/stage0/caps.md`.
+- Tests for the fold builder, the early-stopping split, the default-decision path and the cap selection; a smoke run checked for errors only, with no metrics inspected, before registration.
 
 Estimated compute: about 4-6 hours for the check (no quantized models, no frontier sweeps); item 5 reuses Stage 0's saved frontiers and needs minutes.

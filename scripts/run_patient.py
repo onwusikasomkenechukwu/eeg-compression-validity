@@ -4,6 +4,9 @@
   --model   epidenet | ahlawat             (models.SPECS; ahlawat needs chbmit's 18 channels)
   --arm     patient (patient-specific folds, one unit per patient)
             cross   (leave one patient group out; a single unit "xpat")
+  --protocol plan     (the registered design: run_fold, FP32 + quantized models)
+             epidenet (the reimplementation check, prereg/FIDELITY_UPDATE.md: EpiDeNet's
+                       leave-one-seizure-record-out, FP32 only; patient arm only)
 
 Each job writes
   <out>/<unit>/fold<k>_seed<s>.json   summary, frontier rows, thresholds, timing, environment
@@ -28,6 +31,8 @@ Usage:
   python scripts/run_patient.py --patients all --seeds 0 1 2 3 4 --out runs/stage1
   python scripts/run_patient.py --model ahlawat --patients all --seeds 0 1 2 --out runs/stage1_ahlawat
   python scripts/run_patient.py --arm cross --seeds 0 1 2 --out runs/stage1_cross
+  # Reimplementation check (FP32 only, EpiDeNet's protocol); then scripts/sanity_gate.py --protocol epidenet
+  python scripts/run_patient.py --protocol epidenet --patients all --seeds 0 1 2 --workers 2 --threads 4 --out runs/gate_check
   # Stage 2 / 3: Siena and SeizeIT2 (patients with at least 3 seizure records)
   python scripts/run_patient.py --dataset siena --patients all --out runs/stage2_siena
   python scripts/run_patient.py --dataset seizeit2 --patients all --out runs/stage3_seizeit2
@@ -53,18 +58,19 @@ def _init_worker(devices):
     _DEVICE = devices.get()
 
 
-def build_folds(ds, data_root, arm, unit, channels):
-    from records import cross_patient_folds, make_folds
+def build_folds(ds, data_root, arm, unit, channels, protocol="plan"):
+    from records import cross_patient_folds, loocv_seizure_folds, make_folds
     if arm == "cross":
         return cross_patient_folds(ds, data_root, channels)
-    return make_folds(ds.usable_records(data_root, unit, channels)), None
+    make = loocv_seizure_folds if protocol == "epidenet" else make_folds
+    return make(ds.usable_records(data_root, unit, channels)), None
 
 
 def _job(args):
-    dataset, model, arm, unit, k, seed, data_root, cache, out_dir, threads = args
+    dataset, model, arm, protocol, unit, k, seed, data_root, cache, out_dir, threads = args
     import numpy as np
     from models import SPECS
-    from pipeline import run_fold
+    from pipeline import run_fold, run_reimplementation_check
 
     ds = importlib.import_module(dataset)
     stem = os.path.join(out_dir, unit, f"fold{k}_seed{seed}")
@@ -82,9 +88,10 @@ def _job(args):
     status = "FAILED"
     t0 = time.perf_counter()
     try:
-        folds, names = build_folds(ds, data_root, arm, unit, SPECS[model].channels[dataset])
-        summary, arrays = run_fold(folds, k, cache, ds, model=model, seed=seed, threads=threads,
-                                   device=_DEVICE, log=log_lines.append)
+        folds, names = build_folds(ds, data_root, arm, unit, SPECS[model].channels[dataset], protocol)
+        run = run_reimplementation_check if protocol == "epidenet" else run_fold
+        summary, arrays = run(folds, k, cache, ds, model=model, seed=seed, threads=threads,
+                              device=_DEVICE, log=log_lines.append)
         summary["patient"] = names[k] if arm == "cross" else unit
         summary["arm"] = arm
         summary["timing"]["total_s"] = time.perf_counter() - t0
@@ -107,6 +114,8 @@ def main():
     ap.add_argument("--dataset", default="chbmit", choices=["chbmit", "siena", "seizeit2"])
     ap.add_argument("--model", default="epidenet", choices=["epidenet", "ahlawat"])
     ap.add_argument("--arm", default="patient", choices=["patient", "cross"])
+    ap.add_argument("--protocol", default="plan", choices=["plan", "epidenet"],
+                    help="epidenet: the FP32 reimplementation check (patient arm only)")
     ap.add_argument("--patients", nargs="+", default=["chb01"],
                     help="patient ids, or 'all' (patient arm; ignored by the cross arm)")
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
@@ -120,10 +129,14 @@ def main():
     ap.add_argument("--data-root", default=None, help="default: data/<dataset>")
     ap.add_argument("--cache", default=os.path.expanduser(os.path.join("~", "eegcv_cache")),
                     help="preprocessed-signal cache root; keep it on a local disk")
-    ap.add_argument("--out", default=os.path.join(ROOT, "runs", "stage0"))
+    ap.add_argument("--out", default=None, help="default: runs/stage0 (plan) or runs/gate_check (epidenet)")
     ap.add_argument("--clear-claims", action="store_true",
                     help="delete leftover .claim files first (only when no other runner is active)")
     args = ap.parse_args()
+    if args.protocol == "epidenet" and args.arm != "patient":
+        sys.exit("--protocol epidenet runs on the patient arm only")
+    # Separate folders: the two protocols share job names, and a finished job is skipped.
+    args.out = args.out or os.path.join(ROOT, "runs", "gate_check" if args.protocol == "epidenet" else "stage0")
 
     from models import SPECS
     ds = importlib.import_module(args.dataset)
@@ -148,8 +161,8 @@ def main():
     jobs = []
     for unit in units:
         try:
-            folds, names = build_folds(ds, data_root, args.arm, unit, channels)
-        except ValueError as e:  # fewer than 3 seizure records
+            folds, names = build_folds(ds, data_root, args.arm, unit, channels, args.protocol)
+        except ValueError as e:  # too few seizure records
             print(f"{unit}: skipped ({e})", flush=True)
             continue
         os.makedirs(os.path.join(args.out, unit), exist_ok=True)
@@ -165,11 +178,11 @@ def main():
             for s in args.seeds:
                 stem = os.path.join(args.out, unit, f"fold{k}_seed{s}")
                 if not os.path.exists(stem + ".json") and not os.path.exists(stem + ".claim"):
-                    jobs.append((args.dataset, args.model, args.arm, unit, k, s, data_root, args.cache,
+                    jobs.append((args.dataset, args.model, args.arm, args.protocol, unit, k, s, data_root, args.cache,
                                  args.out, args.threads))
 
     n_proc = args.workers + args.gpu_workers
-    print(f"{len(jobs)} jobs ({args.dataset}, {args.model}, {args.arm} arm) on {args.workers} CPU worker(s) + "
+    print(f"{len(jobs)} jobs ({args.dataset}, {args.model}, {args.arm} arm, {args.protocol} protocol) on {args.workers} CPU worker(s) + "
           f"{args.gpu_workers} {args.gpu_device} worker(s), {args.threads} thread(s) each", flush=True)
     if not jobs:
         return

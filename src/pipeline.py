@@ -389,6 +389,96 @@ def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, devi
     return summary, arrays
 
 
+ES_FRACTION = 0.25  # reimplementation check: share of training windows held out for early stopping
+
+
+def stratified_holdout(y, frac, rng):
+    """Boolean mask of a random `frac` of each class (rounded), drawn with rng."""
+    held = np.zeros(len(y), bool)
+    for c in np.unique(y):
+        idx = np.flatnonzero(y == c)
+        held[rng.choice(idx, size=int(round(frac * len(idx))), replace=False)] = True
+    return held
+
+
+def run_reimplementation_check(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, device="cpu",
+                               log=print):
+    """The protocol-matched reimplementation check (prereg/FIDELITY_UPDATE.md), FP32 only.
+    EpiDeNet's protocol: folds are one seizure record each (records.loocv_seizure_folds);
+    train on every other fold, test on fold k, positive window = the model's predicted class
+    (probability > 0.5, the default decision), EpiDeNet's 2-of-3 vote. No validation fold:
+    early stopping uses a stratified random ES_FRACTION of the training windows, held out
+    from the gradient updates. Training windows, preprocessing and training settings are
+    Stage 0's. Returns (summary, arrays) like run_fold; the summary keeps run_fold's
+    window["fp32"]["epidenet"] layout, so scripts/sanity_gate.py reads it unchanged."""
+    spec = SPECS[model]
+    g = Geometry(spec)
+    channels = spec.channels[ds.NAME]
+    torch.set_num_threads(threads)
+    rng = np.random.default_rng(seed)
+    t = {}
+
+    t0 = time.perf_counter()
+    test_paths = folds[k]
+    train_paths = [p for i, f in enumerate(folds) if i != k for p in f]
+
+    def load(paths):
+        out = []
+        for p in paths:
+            x, events, dur = ds.load_record(p, cache_root, channels)
+            if x is not None:
+                out.append((p, (x[:, ::g.decim] if g.decim > 1 else x, events, dur)))
+        return out
+
+    test, train = load(test_paths), load(train_paths)
+    t["load_s"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    X_all, y_all = train_windows([r for _, r in train], rng, g)
+    held = stratified_holdout(y_all, ES_FRACTION, rng)
+    X, y, Xes, yes = X_all[~held], y_all[~held], X_all[held], y_all[held]
+    mean = X.astype(np.float32).mean(axis=(0, 2), keepdims=True)[0]
+    std = X.astype(np.float32).std(axis=(0, 2), keepdims=True)[0] + 1e-6
+    t["windows_s"] = time.perf_counter() - t0
+    log(f"train windows {len(y)} ({y.sum()} seizure), early-stopping windows {len(yes)} ({yes.sum()} seizure)")
+
+    t0 = time.perf_counter()
+    model_fp32, tinfo = train_fp32(X, y, Xes, yes, mean, std, seed, device, log, spec, g)
+    t.update(tinfo)
+    t["train_s"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    labels, scores = [], []
+    for _, r in test:
+        Xr, yr = eval_windows(r, g)
+        labels.append(yr)
+        scores.append(predict(model_fp32, Xr, mean, std, g))
+    thr = 0.5  # default decision: argmax of the two classes (ties go to class 0, as alarm_raw's '>')
+    y_test, p_test = np.concatenate(labels), np.concatenate(scores)
+    window = {"fp32": {
+        "auroc": float(roc_auc_score(y_test, p_test)) if 0 < y_test.sum() < len(y_test) else None,
+        "specificity": float(((~alarm_raw(p_test, thr)) & (y_test == 0)).sum() / max((y_test == 0).sum(), 1)),
+        "epidenet": epidenet_metrics(test, scores, labels, thr, g),
+    }}
+    t["eval_s"] = time.perf_counter() - t0
+
+    summary = {
+        "protocol": "epidenet", "dataset": ds.NAME, "model": spec.name, "channels": channels,
+        "fold": k, "seed": seed, "device": device, "environment": describe(device),
+        "test_records": [p.replace("\\", "/").split("/")[-1] for p, _ in test],
+        "train_records": len(train), "es_fraction": ES_FRACTION,
+        "train_windows": int(len(y)), "train_seizure_windows": int(y.sum()),
+        "es_windows": int(len(yes)), "es_seizure_windows": int(yes.sum()),
+        "thresholds": {"fp32": thr},
+        "window": window,
+        "timing": t,
+    }
+    arrays = {"test_lengths": np.array([len(lab) for lab in labels]), "test_labels": y_test,
+              "test_fp32": p_test.astype(np.float32), "norm_mean": mean, "norm_std": std,
+              **{f"w_fp32__{n}": v.numpy() for n, v in model_fp32.state_dict().items()}}
+    return summary, arrays
+
+
 def load_fp32(arrays, model="epidenet"):
     """Rebuild a job's trained FP32 model and normalization from its saved .npz arrays.
     Returns (model, mean, std); quantized models follow from it (OnnxInt8, FakeQuant, ...)."""

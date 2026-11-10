@@ -71,6 +71,17 @@ def make_folds(records):
     return folds
 
 
+def loocv_seizure_folds(records):
+    """EpiDeNet's own protocol (the reimplementation check): one fold per seizure record;
+    a job tests on its fold and trains on all the others, so seizure-free records are
+    never used. records: [(record, has_seizure)]. Returns a list of one-record folds.
+    Needs at least 2 seizure records (one to test, one to train)."""
+    sz = [p for p, has in records if has]
+    if len(sz) < 2:
+        raise ValueError(f"need at least 2 seizure records for leave-one-out, got {len(sz)}")
+    return [[p] for p in sz]
+
+
 def cross_patient_folds(ds, root, channels):
     """The plan's cross-patient arm: one fold per patient group (leave one group out), so all of
     a group's records are tested together. Groups keep recordings of the same person together
