@@ -12,7 +12,7 @@ Does post-training quantization move a seizure detector along the false-alarm / 
 | `src/seizeit2.py` | SeizeIT2 (BIDS): the subject's main two-channel behind-the-ear montage; seizures from `*_events.tsv` |
 | `src/epidenet.py` | EpiDeNet from its Table I (checked against the paper's MAC count; channel pooling adapts below 4 channels) |
 | `src/models.py` | Model specs: EpiDeNet (primary) and Ahlawat's 1D CNN (secondary) with their windows, rates and training settings |
-| `src/quantize.py` | ONNX Runtime static INT8 (primary), simulated 8/6/4-bit (dose-response), quantization-aware 8-bit training |
+| `src/quantize.py` | ONNX Runtime static INT8 (primary), simulated 8/6/4-bit (dose-response), quantization-aware 8-bit training; W4A8 and simulated FP16 (exploratory) |
 | `src/pipeline.py` | One fold, any dataset / model / arm: train FP32, quantize, threshold, smooth, score with SzCORE, latency |
 | `src/scoring.py` | SzCORE event scoring and the plan's latency metric |
 | `src/frontier.py` | Patient frontiers, interpolated excess latency (primary endpoint), seed null, pooled endpoint |
@@ -21,7 +21,9 @@ Does post-training quantization move a seizure detector along the false-alarm / 
 | `scripts/download_data.py` | Resumable dataset download (CHB-MIT, Siena, SeizeIT2) |
 | `scripts/run_patient.py` | Runs (fold, seed) jobs for any `--dataset`, `--model`, `--arm`; parallel, resumable, safe to run several at once |
 | `scripts/analyze_frontier.py` | Summary tables, frontier plots, gate checks, the Stage 0 kill rule |
-| `scripts/analyze_stats.py` | Stage 1 statistics: bootstrap intervals, mixed model, concentration, H3, FP/h ratio per patient |
+| `scripts/analyze_stats.py` | Stage 1 statistics: bootstrap intervals, mixed model, concentration, H3, FP/h ratio per patient; `--caps` recall at false-alarm caps; `--excess-only` |
+| `scripts/sanity_gate.py` | The registered FP32 sanity gate and the protocol-matched reimplementation check (`--protocol`, `--loss`) |
+| `scripts/rescore_bitwidths.py` | Exploratory: W4A8 and FP16 versions of finished Stage 0 models, from their saved weights |
 | `tests/test_core.py` | Correctness tests (scoring, alarm timing, folds, BN folding, quantization, QAT, endpoint, statistics, dataset counts) |
 | `runs/` | Outputs: `stage0/GATE.md` is the pipeline-gate report |
 
@@ -65,10 +67,22 @@ Later stages use the same runner (see its docstring for more):
 
 ```bash
 python scripts/run_patient.py --patients all --seeds 0 1 2 3 4 --out runs/stage1                 # 5 seeds
-python scripts/run_patient.py --model ahlawat --patients all --out runs/stage1_ahlawat           # secondary model
+python scripts/run_patient.py --model ahlawat --patients all --out runs/stage1_ahlawat           # primary after update 1
 python scripts/run_patient.py --arm cross --out runs/stage1_cross                                # leave one group out
 python scripts/run_patient.py --dataset siena --patients all --out runs/stage2_siena             # replication
 python scripts/run_patient.py --dataset seizeit2 --patients all --out runs/stage3_seizeit2       # wearable
+```
+
+Reimplementation check and exploratory follow-ups (prereg/FIDELITY_UPDATE.md):
+
+```bash
+python scripts/run_patient.py --protocol epidenet --patients all --seeds 0 1 2                  # -> runs/gate_check
+python scripts/sanity_gate.py --protocol epidenet
+python scripts/run_patient.py --protocol epidenet --loss unweighted --patients all --seeds 0 1 2  # exploratory
+python scripts/sanity_gate.py --protocol epidenet --loss unweighted
+python scripts/rescore_bitwidths.py                                                              # -> runs/stage0_bitwidths
+python scripts/analyze_stats.py --runs runs/stage0_bitwidths --models int8 sim6 sim4 w4a8 fp16 --excess-only
+python scripts/analyze_stats.py --runs runs/stage0_bitwidths --models int8 sim6 sim4 w4a8 fp16 --caps 0.5 1 2
 ```
 
 Patients with fewer than 3 usable seizure records are skipped with a message (the fold design needs a test, a validation and a training fold).

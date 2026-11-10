@@ -53,7 +53,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from devices import describe, get_device
 from models import SPECS
-from quantize import QAT, FakeQuant, OnnxInt8
+from quantize import QAT, FakeQuant, Float16Sim, OnnxInt8
 from records import FS, seizure_fraction, window_starts
 from scoring import score_record
 
@@ -214,22 +214,30 @@ def epidenet_metrics(test, scores, labels, thr, g=EPIDENET):
             "seizures_detected": detected, "seizures": seizures, "hours": hours}
 
 
-def train_fp32(X, y, Xv, yv, mean, std, seed, device_name, log, spec=SPECS["epidenet"], g=EPIDENET):
+def train_fp32(X, y, Xv, yv, mean, std, seed, device_name, log, spec=SPECS["epidenet"], g=EPIDENET,
+               class_weight="inverse"):
     torch.manual_seed(seed)  # initialization is drawn on the CPU, so it is the same on every device
     model = spec.make(X.shape[1])
-    return fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, spec.lr, spec.max_epochs, spec.patience, g)
+    return fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, spec.lr, spec.max_epochs, spec.patience, g,
+               class_weight)
 
 
-def fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, lr, max_epochs, patience, g=EPIDENET):
-    """Class-weighted training with early stopping on validation loss; returns the best
-    epoch's model on the CPU, in eval mode. Shared by FP32 training and QAT fine-tuning."""
+def fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, lr, max_epochs, patience, g=EPIDENET,
+        class_weight="inverse"):
+    """Training with early stopping on validation loss; returns the best epoch's model on the
+    CPU, in eval mode. Shared by FP32 training and QAT fine-tuning. class_weight "inverse"
+    (every registered run) weights the seizure class by the background:seizure ratio of the
+    training windows; "none" is plain cross-entropy (the exploratory unweighted-loss check)."""
+    if class_weight not in ("inverse", "none"):
+        raise ValueError(f"class_weight must be 'inverse' or 'none', not {class_weight!r}")
     device = get_device(device_name)
     if device.type == "cuda":  # repeatable runs on NVIDIA GPUs (at a small speed cost)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    w = torch.tensor([1.0, (y == 0).sum() / max((y == 1).sum(), 1)], dtype=torch.float32).to(device)
+    w = (torch.tensor([1.0, (y == 0).sum() / max((y == 1).sum(), 1)], dtype=torch.float32).to(device)
+         if class_weight == "inverse" else None)
     loss_fn = nn.CrossEntropyLoss(weight=w)
     Xt, yt = _to_tensor(X, mean, std, g).to(device), torch.from_numpy(y).to(device)
     Xvt, yvt = _to_tensor(Xv, mean, std, g).to(device), torch.from_numpy(yv).to(device)
@@ -401,8 +409,11 @@ def stratified_holdout(y, frac, rng):
     return held
 
 
+LOSSES = {"weighted": "inverse", "unweighted": "none"}  # reimplementation check: loss -> fit's class_weight
+
+
 def run_reimplementation_check(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, device="cpu",
-                               log=print):
+                               log=print, loss="weighted"):
     """The protocol-matched reimplementation check (prereg/FIDELITY_UPDATE.md), FP32 only.
     EpiDeNet's protocol: folds are one seizure record each (records.loocv_seizure_folds);
     train on every other fold, test on fold k, positive window = the model's predicted class
@@ -410,7 +421,10 @@ def run_reimplementation_check(folds, k, cache_root, ds, model="epidenet", seed=
     early stopping uses a stratified random ES_FRACTION of the training windows, held out
     from the gradient updates. Training windows, preprocessing and training settings are
     Stage 0's. Returns (summary, arrays) like run_fold; the summary keeps run_fold's
-    window["fp32"]["epidenet"] layout, so scripts/sanity_gate.py reads it unchanged."""
+    window["fp32"]["epidenet"] layout, so scripts/sanity_gate.py reads it unchanged.
+    loss "weighted" is the registered check; "unweighted" (plain cross-entropy) is the
+    exploratory post hoc test of whether class weighting explains its failure."""
+    class_weight = LOSSES[loss]
     spec = SPECS[model]
     g = Geometry(spec)
     channels = spec.channels[ds.NAME]
@@ -443,7 +457,7 @@ def run_reimplementation_check(folds, k, cache_root, ds, model="epidenet", seed=
     log(f"train windows {len(y)} ({y.sum()} seizure), early-stopping windows {len(yes)} ({yes.sum()} seizure)")
 
     t0 = time.perf_counter()
-    model_fp32, tinfo = train_fp32(X, y, Xes, yes, mean, std, seed, device, log, spec, g)
+    model_fp32, tinfo = train_fp32(X, y, Xes, yes, mean, std, seed, device, log, spec, g, class_weight)
     t.update(tinfo)
     t["train_s"] = time.perf_counter() - t0
 
@@ -463,7 +477,7 @@ def run_reimplementation_check(folds, k, cache_root, ds, model="epidenet", seed=
     t["eval_s"] = time.perf_counter() - t0
 
     summary = {
-        "protocol": "epidenet", "dataset": ds.NAME, "model": spec.name, "channels": channels,
+        "protocol": "epidenet", "loss": loss, "dataset": ds.NAME, "model": spec.name, "channels": channels,
         "fold": k, "seed": seed, "device": device, "environment": describe(device),
         "test_records": [p.replace("\\", "/").split("/")[-1] for p, _ in test],
         "train_records": len(train), "es_fraction": ES_FRACTION,
@@ -488,3 +502,82 @@ def load_fp32(arrays, model="epidenet"):
     net = SPECS[model].make(mean.shape[0])
     net.load_state_dict(state)
     return net.eval(), mean, std
+
+
+# Exploratory bit widths added after registration (Aryal, 2026-11-10: map bit widths to hardware).
+EXTRA_VARIANTS = {
+    "w4a8": lambda net, calib: FakeQuant(net, 4, act_bits=8).calibrate(calib).eval(),
+    "fp16": lambda net, calib: Float16Sim(net).eval(),
+}
+
+
+def rescore_fold(folds, k, cache_root, ds, arrays, variants=("w4a8", "fp16"), model="epidenet", seed=0,
+                 threads=4, log=print):
+    """Rebuild a finished run_fold job's FP32 model from its saved arrays, derive further
+    post-training variants (EXTRA_VARIANTS) and evaluate them exactly as run_fold evaluates
+    its quantized models: thresholds at TARGET_SPEC on the validation fold's seizure-free
+    windows, frontier rows with their own and with FP32's threshold, window metrics. No
+    training. The training windows are regenerated with the job's seed (calibration draws
+    from them); the regenerated normalization and the rebuilt FP32 model's test scores are
+    checked against the saved ones and reported."""
+    spec = SPECS[model]
+    g = Geometry(spec)
+    channels = spec.channels[ds.NAME]
+    torch.set_num_threads(threads)
+    rng = np.random.default_rng(seed)
+    t0 = time.perf_counter()
+
+    nk = (k + 1) % len(folds)
+    train_paths = [p for i, f in enumerate(folds) if i not in (k, nk) for p in f]
+
+    def load(paths):
+        out = []
+        for p in paths:
+            x, events, dur = ds.load_record(p, cache_root, channels)
+            if x is not None:
+                out.append((p, (x[:, ::g.decim] if g.decim > 1 else x, events, dur)))
+        return out
+
+    test, val, train = load(folds[k]), load(folds[nk]), load(train_paths)
+    X, _ = train_windows([r for _, r in train], rng, g)
+    net, mean, std = load_fp32(arrays, model)
+    mean_regen = X.astype(np.float32).mean(axis=(0, 2), keepdims=True)[0]
+    checks = {"norm_mean_max_abs_diff": float(np.abs(mean_regen - mean).max())}
+    calib = _to_tensor(X[np.array(arrays["calib_idx"])], mean, std, g)
+    fns = {"fp32": net, **{v: EXTRA_VARIANTS[v](net, calib) for v in variants}}
+
+    def score_records(recs):
+        labels, sc = [], {n: [] for n in fns}
+        for _, r in recs:
+            Xr, yr = eval_windows(r, g)
+            labels.append(yr)
+            for n, fn in fns.items():
+                sc[n].append(predict(fn, Xr, mean, std, g))
+        return labels, sc
+
+    val_labels, val_sc = score_records(val)
+    yv = np.concatenate(val_labels)
+    val_scores = {n: np.concatenate(v) for n, v in val_sc.items()}
+    thr = {n: float(np.quantile(val_scores[n][yv == 0], TARGET_SPEC)) for n in fns}
+    labels, test_scores = score_records(test)
+    checks["test_fp32_max_abs_diff"] = float(np.abs(np.concatenate(test_scores["fp32"])
+                                                    - np.array(arrays["test_fp32"])).max())
+    log(f"checks: {checks}")
+
+    rows = []
+    for name in variants:
+        rows += frontier_rows(test, test_scores[name], thr[name], name, "own", g)
+        rows += frontier_rows(test, test_scores[name], thr["fp32"], name, "fp32", g)
+    y_all = np.concatenate(labels)
+    window = {}
+    for name in variants:
+        p_all = np.concatenate(test_scores[name])
+        window[name] = {
+            "auroc": float(roc_auc_score(y_all, p_all)) if 0 < y_all.sum() < len(y_all) else None,
+            "specificity": float(((~alarm_raw(p_all, thr[name])) & (y_all == 0)).sum() / max((y_all == 0).sum(), 1)),
+            "epidenet": epidenet_metrics(test, test_scores[name], labels, thr[name], g),
+        }
+    summary = {"variants": list(variants), "fold": k, "seed": seed, "thresholds": thr, "checks": checks,
+               "window": window, "frontier": rows, "timing": {"total_s": time.perf_counter() - t0}}
+    arrays_out = {f"test_{n}": np.concatenate(test_scores[n]).astype(np.float32) for n in variants}
+    return summary, arrays_out

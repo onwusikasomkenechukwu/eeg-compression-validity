@@ -8,10 +8,12 @@ and averaged over seeds. Both parts must pass:
 
 --protocol says which design the run used (plan: Stage 0's registered design; epidenet: the
 protocol-matched reimplementation check, prereg/FIDELITY_UPDATE.md); every job in the run must
-match it. The criteria are the same for both.
+match it. The criteria are the same for both. --loss unweighted reads the exploratory
+unweighted-loss rerun of the check (runs/gate_check_unweighted); it is labelled exploratory.
 
 Usage: python scripts/sanity_gate.py --runs runs/stage0
        python scripts/sanity_gate.py --protocol epidenet --runs runs/gate_check
+       python scripts/sanity_gate.py --protocol epidenet --loss unweighted
 """
 import argparse
 import glob
@@ -27,15 +29,24 @@ FPH_RANGE = (1.12, 4.48)
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--protocol", default="plan", choices=["plan", "epidenet"])
-    ap.add_argument("--runs", default=None, help="default: runs/stage0 (plan) or runs/gate_check (epidenet)")
+    ap.add_argument("--loss", default="weighted", choices=["weighted", "unweighted"])
+    ap.add_argument("--runs", default=None,
+                    help="default: runs/stage0 (plan), runs/gate_check or runs/gate_check_unweighted (epidenet)")
     args = ap.parse_args()
-    args.runs = args.runs or os.path.join(ROOT, "runs", "gate_check" if args.protocol == "epidenet" else "stage0")
+    default_runs = {("plan", "weighted"): "stage0", ("epidenet", "weighted"): "gate_check",
+                    ("epidenet", "unweighted"): "gate_check_unweighted"}.get((args.protocol, args.loss))
+    if default_runs is None:
+        raise SystemExit("--loss unweighted applies to --protocol epidenet only")
+    args.runs = args.runs or os.path.join(ROOT, "runs", default_runs)
 
     per_seed = defaultdict(lambda: {"det": 0, "sz": 0, "fp_hours": 0.0, "hours": 0.0, "jobs": 0})
+    win = []  # (voted window sensitivity, voted window specificity) per job, descriptive only
     for p in glob.glob(os.path.join(args.runs, "*", "fold*_seed*.json")):
         s = json.load(open(p))
         if s.get("protocol", "plan") != args.protocol:
             raise SystemExit(f"{p}: protocol {s.get('protocol', 'plan')!r}, expected {args.protocol!r}")
+        if s.get("loss", "weighted") != args.loss:
+            raise SystemExit(f"{p}: loss {s.get('loss', 'weighted')!r}, expected {args.loss!r}")
         e = s["window"]["fp32"]["epidenet"]
         a = per_seed[s["seed"]]
         a["det"] += e["seizures_detected"]
@@ -43,6 +54,7 @@ def main():
         a["fp_hours"] += e["fp_per_h_vote"] * e["hours"]
         a["hours"] += e["hours"]
         a["jobs"] += 1
+        win.append((e["sens_vote"], e["spec_vote"]))
 
     if not per_seed:
         raise SystemExit(f"no finished jobs in {args.runs}")
@@ -55,12 +67,16 @@ def main():
 
     title = {"plan": "FP32 sanity gate (pre-registered)",
              "epidenet": "Protocol-matched reimplementation check (EpiDeNet's protocol, registered update)"}
-    lines = [f"# {title[args.protocol]}", "",
+    heading = (title[args.protocol] if args.loss == "weighted" else
+               "Reimplementation check rerun with unweighted cross-entropy (EpiDeNet's protocol; exploratory, post hoc)")
+    lines = [f"# {heading}", "",
              "| seed | jobs | seizures detected | detection rate | voted window FP/h | hours |", "|---|---|---|---|---|---|"]
     lines += [f"| {s} | {j} | {d}/{z} | {r:.3f} | {f:.2f} | {h:.0f} |" for s, j, d, z, r, f, h in rows]
     lines += ["", f"Mean over seeds: detection {det:.3f} (pass if >= {DETECT_MIN}): **{'PASS' if pass_a else 'FAIL'}**; "
               f"voted window FP/h {fph:.2f} (pass if within {FPH_RANGE}): **{'PASS' if pass_b else 'FAIL'}**.",
-              "", f"Gate: **{'PASS' if pass_a and pass_b else 'FAIL'}**. EpiDeNet: 165/181 detected (0.912), 2.24 FP/h with its vote."]
+              "", f"Gate: **{'PASS' if pass_a and pass_b else 'FAIL'}**. EpiDeNet: 165/181 detected (0.912), 2.24 FP/h with its vote.",
+              "", f"Descriptive (not a criterion): voted window sensitivity {100 * sum(w[0] for w in win) / len(win):.2f}%, "
+              f"specificity {100 * sum(w[1] for w in win) / len(win):.2f}%, mean over jobs (EpiDeNet: 68.73%, 99.75%)."]
     out = os.path.join(args.runs, "sanity_gate.md")
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

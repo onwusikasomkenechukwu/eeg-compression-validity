@@ -351,3 +351,53 @@ def test_sensitivity_at_cap_picks_best_width_under_the_cap():
     assert sensitivity_at_cap(front, 0.5) == (6, 10, 20)       # at the cap counts
     assert sensitivity_at_cap(front, 0.4) == (3, 10, 30)
     assert sensitivity_at_cap(front[:2], 1.0) is None          # never gets under the cap
+
+
+def test_unweighted_loss_rerun_trains_with_plain_cross_entropy():
+    from pipeline import fit, run_reimplementation_check
+    from records import loocv_seizure_folds
+    folds = loocv_seizure_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
+    summary, _ = run_reimplementation_check(folds, 1, None, _TinyDataset, seed=0, threads=1, log=lambda m: None,
+                                            loss="unweighted")
+    assert summary["loss"] == "unweighted" and summary["thresholds"] == {"fp32": 0.5}
+    with pytest.raises(ValueError):
+        fit(EpiDeNet(), None, None, None, None, None, None, 0, "cpu", print, 1e-3, 1, 1, class_weight="focal")
+
+
+def test_w4a8_uses_4_bit_weights_and_8_bit_activations(trained_like_model):
+    m, x = trained_like_model
+    with torch.no_grad():
+        ref = m(x)
+        w4a8 = FakeQuant(m, 4, act_bits=8).calibrate(x)
+        w = w4a8.layers[1].weight.reshape(w4a8.layers[1].weight.shape[0], -1)
+        assert max(len(torch.unique(row)) for row in w) <= 15          # 4-bit symmetric: 15 levels
+        err = {name: (q(x) - ref).abs().mean().item() for name, q in
+               {"w4a8": w4a8, "sim4": FakeQuant(m, 4).calibrate(x), "sim8": FakeQuant(m, 8).calibrate(x)}.items()}
+    assert err["sim8"] < err["w4a8"] < err["sim4"]
+
+
+def test_float16_sim_is_close_to_fp32_and_rounds(trained_like_model):
+    from quantize import Float16Sim
+    m, x = trained_like_model
+    with torch.no_grad():
+        ref, h = m(x), Float16Sim(m)
+        out = h(x)
+        w = h.net.features[0][0].weight
+    assert torch.equal(w, w.half().float())                              # weights on the FP16 grid
+    assert 0 < (out - ref).abs().max().item() < 1e-2
+
+
+def test_rescore_fold_rebuilds_a_finished_job_exactly(tmp_path):
+    from pipeline import rescore_fold, run_fold
+    from records import make_folds
+    folds = make_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
+    summary, saved = run_fold(folds, 0, None, _TinyDataset, seed=1, threads=1, log=lambda m: None)
+    np.savez_compressed(tmp_path / "job.npz", **saved)                  # through the saved file, as in a run
+    arrays = np.load(tmp_path / "job.npz")
+    res, out = rescore_fold(folds, 0, None, _TinyDataset, arrays, seed=1, threads=1, log=lambda m: None)
+    assert res["checks"]["norm_mean_max_abs_diff"] == 0
+    assert res["checks"]["test_fp32_max_abs_diff"] < 1e-5
+    assert {r["variant"] for r in res["frontier"]} == {"w4a8", "fp16"}
+    assert {r["thr_mode"] for r in res["frontier"]} == {"own", "fp32"}
+    assert res["thresholds"]["fp32"] == pytest.approx(summary["thresholds"]["fp32"], abs=1e-6)
+    assert len(out["test_w4a8"]) == len(arrays["test_fp32"])

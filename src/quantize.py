@@ -9,7 +9,11 @@ training windows:
     BatchNorm folded into the convolutions, per-output-channel symmetric weights,
     per-tensor asymmetric activations at the input of every conv/linear layer, ranges
     from calibration min/max. Used for the 6- and 4-bit dose-response; the 8-bit
-    version cross-checks the ONNX INT8 path.
+    version cross-checks the ONNX INT8 path. FakeQuant(4, act_bits=8) is W4A8, the
+    sub-8-bit scheme some deployment stacks support (4-bit weights, 8-bit activations);
+    exploratory, added after registration.
+  - Float16Sim: FP16 weights and layer inputs (rounded to half precision), FP32 accumulation;
+    exploratory, added after registration.
 
 Quantization-aware training (QAT), the plan's retrained condition, compared only against
 the FP32 seed band because retraining mixes quantization with training noise:
@@ -71,11 +75,13 @@ def _quant_act(x, lo, hi, bits):
 
 
 class FakeQuant(nn.Module):
-    """Simulated `bits`-bit inference of a trained model. Call calibrate() before use."""
+    """Simulated inference of a trained model with `bits`-bit weights and `act_bits`-bit
+    activations (default: the same as the weights). Call calibrate() before use."""
 
-    def __init__(self, model, bits):
+    def __init__(self, model, bits, act_bits=None):
         super().__init__()
         self.bits = bits
+        self.act_bits = bits if act_bits is None else act_bits
         self.net = fold_bn(model)
         self.layers = [m for m in self.net.modules() if isinstance(m, QUANT_LAYERS)]
         for m in self.layers:
@@ -92,7 +98,7 @@ class FakeQuant(nn.Module):
             self.ranges[module] = (min(lo, x.min().item()), max(hi, x.max().item()))
             return None
         lo, hi = self.ranges[module]
-        return (_quant_act(x, lo, hi, self.bits),)
+        return (_quant_act(x, lo, hi, self.act_bits),)
 
     @torch.no_grad()
     def calibrate(self, X, batch=1024):
@@ -101,6 +107,29 @@ class FakeQuant(nn.Module):
             self.net(X[i:i + batch])
         self._calibrating = False
         return self
+
+    def forward(self, x):
+        return self.net(x)
+
+
+def _to_half(t):
+    return t.half().float()
+
+
+class Float16Sim(nn.Module):
+    """Simulated FP16 inference: BatchNorm folded, weights and biases rounded to half
+    precision, every conv/linear layer's input rounded to half precision, accumulation in
+    FP32 (as on an FPU with half-precision storage). Needs no calibration."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.net = fold_bn(model)
+        for m in self.net.modules():
+            if isinstance(m, QUANT_LAYERS):
+                m.weight.data = _to_half(m.weight.data)
+                if m.bias is not None:
+                    m.bias.data = _to_half(m.bias.data)
+                m.register_forward_pre_hook(lambda module, inputs: (_to_half(inputs[0]),))
 
     def forward(self, x):
         return self.net(x)

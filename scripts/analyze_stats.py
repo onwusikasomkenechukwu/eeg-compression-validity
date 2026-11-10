@@ -5,8 +5,14 @@ ratio per patient.
 With --caps, only the exploratory recall-at-false-alarm-cap analysis runs
 (prereg/FIDELITY_UPDATE.md item 5), from the job summaries alone:
 
+With --excess-only, only the excess-latency table runs, from the job summaries alone
+(for runs without Stage 0's arrays, such as scripts/rescore_bitwidths.py's). --models picks
+the compared models (default: Stage 0's).
+
 Usage: python scripts/analyze_stats.py --runs runs/stage0   -> <runs>/stats.md
        python scripts/analyze_stats.py --runs runs/stage0 --caps 0.5 1 2   -> <runs>/caps.md
+       python scripts/analyze_stats.py --runs runs/stage0_bitwidths --models int8 sim6 sim4 w4a8 fp16 --excess-only
+           -> <runs>/excess.md   (add --caps 0.5 1 2 for <runs>/caps.md)
 """
 import argparse
 import glob
@@ -32,7 +38,7 @@ def f(x, nd=2):
     return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else ("inf" if x == math.inf else f"{x:.{nd}f}")
 
 
-def caps_report(jobs, caps, runs):
+def caps_report(jobs, caps, runs, models=MODELS):
     """Recall under false-alarm caps: per patient, seed and model, the best sensitivity among
     smoothing widths at or under the cap (frontier.sensitivity_at_cap). Pooled = seizures
     detected / seizures over the patients where the model reaches the cap, per seed, then the
@@ -40,7 +46,7 @@ def caps_report(jobs, caps, runs):
     cap) of the model's sensitivity minus the same seed's FP32; median over patients with a
     patient-bootstrap 95% interval. Patient-seed values where a model never reaches the cap are
     counted, not imputed."""
-    models = ["fp32"] + MODELS
+    models = ["fp32"] + list(models)
     res = defaultdict(dict)  # (patient, seed) -> model -> (detected, seizures, smooth_s) or None
     for patient, seeds in jobs.items():
         for seed, runs_ in seeds.items():
@@ -84,12 +90,42 @@ def caps_report(jobs, caps, runs):
     return md
 
 
+def excess_table(jobs, models, runs):
+    """Excess latency at FP32's false-alarm rate per model, from the summaries' frontier rows."""
+    excess = defaultdict(lambda: defaultdict(dict))
+    for patient, seeds in jobs.items():
+        for seed, runs_ in seeds.items():
+            fr = patient_frontier([row for s, _ in runs_ for row in s["frontier"]])
+            for m in models:
+                if (m, "own") in fr:
+                    excess[m][patient][seed] = excess_latency(fr[("fp32", "own")], fr[(m, "own")])[0]
+    md = [f"# Excess latency at FP32's false-alarm rate (s): {os.path.relpath(runs, ROOT)}", "",
+          f"{len(jobs)} patient(s). Pooled = median over seeds per patient, then over patients.", "",
+          "| model | pooled | 95% patient-bootstrap CI | mixed model mean [95% CI] | censored | undefined |",
+          "|---|---|---|---|---|---|"]
+    for m in models:
+        if not excess[m]:
+            continue
+        pooled, per_patient = pooled_excess(excess[m])
+        ci = bootstrap_ci(list(per_patient.values()))
+        mm = mixed_model([(p, s, x) for p, seeds in excess[m].items() for s, x in seeds.items()])
+        vals = [x for seeds in excess[m].values() for x in seeds.values()]
+        md.append(f"| {m} | {f(pooled)} | [{f(ci[0])}, {f(ci[1])}] | "
+                  + (f"{f(mm['mean'])} [{f(mm['ci'][0])}, {f(mm['ci'][1])}]" if mm else "n/a")
+                  + f" | {sum(x == math.inf for x in vals)}/{len(vals)} | {sum(math.isnan(x) for x in vals)} |")
+    return md + [""]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default=os.path.join(ROOT, "runs", "stage0"))
     ap.add_argument("--caps", nargs="+", type=float, default=None,
                     help="false alarms per 24 h; runs only the recall-at-cap analysis, written to <runs>/caps.md")
+    ap.add_argument("--models", nargs="+", default=MODELS)
+    ap.add_argument("--excess-only", action="store_true",
+                    help="only the excess-latency table, from the summaries alone, written to <runs>/excess.md")
     args = ap.parse_args()
+    models = args.models
 
     jobs = defaultdict(lambda: defaultdict(list))  # patient -> seed -> [(summary, npz path)]
     for p in sorted(glob.glob(os.path.join(args.runs, "*", "fold*_seed*.json"))):
@@ -97,10 +133,20 @@ def main():
         jobs[s["patient"]][s["seed"]].append((s, p[:-5] + ".npz"))
 
     if args.caps:
-        md = caps_report(jobs, args.caps, args.runs)
+        md = caps_report(jobs, args.caps, args.runs, models)
         with open(os.path.join(args.runs, "caps.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(md) + "\n")
         print("\n".join(md))
+        return
+
+    if args.excess_only:
+        md = excess_table(jobs, models, args.runs)
+        with open(os.path.join(args.runs, "excess.md"), "w", encoding="utf-8") as fh:
+            fh.write("
+".join(md) + "
+")
+        print("
+".join(md))
         return
 
     excess = defaultdict(lambda: defaultdict(dict))   # model -> patient -> seed -> s
@@ -139,7 +185,7 @@ def main():
     md += ["## Excess latency at FP32's false-alarm rate (s)", "",
            "| model | pooled (median of patient medians) | 95% patient-bootstrap CI | mixed model mean [95% CI] | "
            "patient SD | concentration (worst 20%) | censored |", "|---|---|---|---|---|---|---|"]
-    for m in MODELS:
+    for m in models:
         if not excess[m]:
             continue
         pooled, per_patient = pooled_excess(excess[m])
