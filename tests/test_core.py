@@ -387,14 +387,16 @@ def test_float16_sim_is_close_to_fp32_and_rounds(trained_like_model):
     assert 0 < (out - ref).abs().max().item() < 1e-2
 
 
-def test_rescore_fold_rebuilds_a_finished_job_exactly(tmp_path):
+@pytest.mark.parametrize("model", ["epidenet", "ahlawat"])
+def test_rescore_fold_rebuilds_a_finished_job_exactly(tmp_path, model):
     from pipeline import rescore_fold, run_fold
     from records import make_folds
     folds = make_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
-    summary, saved = run_fold(folds, 0, None, _TinyDataset, seed=1, threads=1, log=lambda m: None)
+    summary, saved = run_fold(folds, 0, None, _TinyDataset, model=model, seed=1, threads=1, log=lambda m: None)
     np.savez_compressed(tmp_path / "job.npz", **saved)                  # through the saved file, as in a run
     arrays = np.load(tmp_path / "job.npz")
-    res, out = rescore_fold(folds, 0, None, _TinyDataset, arrays, seed=1, threads=1, log=lambda m: None)
+    res, out = rescore_fold(folds, 0, None, _TinyDataset, arrays, model=model, seed=1, threads=1,
+                            log=lambda m: None)
     assert res["checks"]["norm_mean_max_abs_diff"] == 0
     assert res["checks"]["test_fp32_max_abs_diff"] < 1e-5
     assert {r["variant"] for r in res["frontier"]} == {"w4a8", "fp16"}
