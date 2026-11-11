@@ -142,11 +142,8 @@ def main():
     if args.excess_only:
         md = excess_table(jobs, models, args.runs)
         with open(os.path.join(args.runs, "excess.md"), "w", encoding="utf-8") as fh:
-            fh.write("
-".join(md) + "
-")
-        print("
-".join(md))
+            fh.write("\n".join(md) + "\n")
+        print("\n".join(md))
         return
 
     excess = defaultdict(lambda: defaultdict(dict))   # model -> patient -> seed -> s
