@@ -40,4 +40,6 @@ Stop rule: **CONTINUE**, because 4-bit clears both the band and the floor (the r
 
 ## 4. Decision needed (review of design choices)
 
+**Resolved (2026-11-10):** a protocol-matched reimplementation check was registered (OSF update 1) and run; it also failed (`runs/gate_check/sanity_gate.md`), and the Table I recheck found no discrepancy (`runs/gate_check/TABLE_I_RECHECK.md`). All results above are exploratory; the confirmatory test moved to Ahlawat's model (OSF update 2, `prereg/OSF_UPDATE_AHLAWAT.md`). Original text of this section follows.
+
 The gate failed on the false-positive side while detection exceeded EpiDeNet's. Before any rerun, the registration should be updated with whatever changes, and the failed gate reported in the paper either way.

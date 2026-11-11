@@ -1,3 +1,5 @@
+*Superseded: the submitted registration text is `prereg/OSF_FORM.md` (2026-10-25), with updates in `prereg/OSF_UPDATE_FORM.md` and `prereg/OSF_UPDATE_AHLAWAT.md`. Kept as the working draft.*
+
 # Pre-registration draft: the FP32 sanity gate and the Stage 0 latency floor
 
 Draft of Oct 24, 2026, for the OSF registration due Nov 13. It covers the two rules the research plan marks as guesses: the 2x tolerance on the FP32 sanity gate and the 2-second floor in the Stage 0 kill. Everything else is fixed elsewhere: the claim, primary test and gates in the plan, and the implementation choices in the docstrings of `src/chbmit.py`, `src/pipeline.py`, `src/quantize.py` and `src/frontier.py`.

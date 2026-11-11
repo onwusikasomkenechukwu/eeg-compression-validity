@@ -1,6 +1,6 @@
-# OSF registration update 2 (draft): confirmatory test with Ahlawat's model
+# OSF registration update 2: confirmatory test with Ahlawat's model
 
-Draft, not submitted. Register before any Ahlawat job is run in this pipeline. Decisions taken 2026-11-10: 5 seeds for the confirmatory test, with a pre-specified interim report on seeds 0-2 for the undergraduate conference; run on the laptop (WSL); fidelity check B; W4A8 and FP16 included as exploratory. Same mechanics as update 1 (`prereg/OSF_UPDATE_FORM.md`): append each paragraph to the end of its field; files cannot be added, so cite the commit. Fill `[commit]` with the commit that contains this file and `scripts/check_ahlawat.py`.
+**Status:** submitted on OSF on 2026-11-10, citing commit 819d4ad, before any Ahlawat job was run in this pipeline. The run is queued (`runs/stage1_ahlawat/queue.sh`; seeds 0-2, then 3-4, then the W4A8/FP16 rescore). Decisions taken 2026-11-10: 5 seeds for the confirmatory test, with a pre-specified interim report on seeds 0-2 for the undergraduate conference; run on the laptop (WSL); fidelity check B; W4A8 and FP16 included as exploratory. Same mechanics as update 1 (`prereg/OSF_UPDATE_FORM.md`): append each paragraph to the end of its field; files cannot be added, so cite the commit. `[commit]` below was entered as 819d4ad.
 
 ## Justification tab
 
@@ -18,7 +18,7 @@ Draft, not submitted. Register before any Ahlawat job is run in this pipeline. D
 
 > Update 2: confirmatory test with Ahlawat's model.
 >
-> Design: patient-specific, as registered (each patient's records grouped into folds; fold k tests on fold k, validates on fold k+1, trains on the rest). All 24 CHB-MIT cases qualify with the 18-channel montage: 683 usable records, 138 seizure records, 138 folds. Seeds 0-4 (690 jobs), run in two batches with identical code and environment: seeds 0-2 first, then seeds 3-4. Environment fixed for the whole run: WSL2 Ubuntu, Python 3.12, torch 2.14.1 CPU build, the versions in requirements.txt, CPU only, 4 threads per job, code at commit [commit].
+> Design: patient-specific, as registered (each patient's records grouped into folds; fold k tests on fold k, validates on fold k+1, trains on the rest). All 24 CHB-MIT cases qualify with the 18-channel montage: 683 usable records, 138 seizure records, 138 folds. Seeds 0-4 (690 jobs), run in two batches with identical code and environment: seeds 0-2 first, then seeds 3-4. Environment fixed for the whole run: WSL2 Ubuntu, Python 3.12, torch 2.14.1 CPU build, the versions in requirements.txt, CPU only, 4 threads per job, code at commit 819d4ad.
 >
 > Interim report (seeds 0-2, pre-specified): when seeds 0-2 finish, the registered analyses are computed on them and may be reported, labelled interim, in a conference abstract or poster. The interim report makes no decision: it cannot stop the run, change the design, or replace the confirmatory test, and seeds 3-4 are run whatever it shows.
 >
@@ -34,13 +34,13 @@ Draft, not submitted. Register before any Ahlawat job is run in this pipeline. D
 
 ## Page 7: Other (add at the end)
 
-> Update 2: code at commit [commit] (scripts/run_patient.py --model ahlawat --seeds 0 1 2, then --seeds 3 4; scripts/check_ahlawat.py; scripts/rescore_bitwidths.py; scripts/analyze_frontier.py; scripts/analyze_stats.py). Compute: about 56 minutes per Ahlawat job on the development machine (chb01, fold 0), so seeds 0-2 (414 jobs) take about 8 days and seeds 3-4 (276 jobs) about 5 more at two parallel jobs.
+> Update 2: code at commit 819d4ad (scripts/run_patient.py --model ahlawat --seeds 0 1 2, then --seeds 3 4; scripts/check_ahlawat.py; scripts/rescore_bitwidths.py; scripts/analyze_frontier.py; scripts/analyze_stats.py). Compute: about 56 minutes per Ahlawat job on the development machine (chb01, fold 0), so seeds 0-2 (414 jobs) take about 8 days and seeds 3-4 (276 jobs) about 5 more at two parallel jobs.
 
 ---
 
-## Before submitting
+## Checklist before submitting
 
 1. **H1 wording.** The original registration states the stop rule but not a "supported" criterion for H1 in so many words; this draft makes it explicit with the same band and 2 s floor. Ask Aryal whether it reads as a clarification, not a change.
-2. **Commit.** Commit and push this file and `scripts/check_ahlawat.py`, then put that commit's hash in the two `[commit]` places.
+2. **Commit.** Done: 819d4ad, pushed.
 3. **Rescore support for Ahlawat.** Done: the rebuild-and-rescore test now runs for both models on synthetic data (`test_rescore_fold_rebuilds_a_finished_job_exactly[ahlawat]`), so no real Ahlawat job is needed before registration. Point `rescore_bitwidths.py --runs` at the Ahlawat run folder afterwards.
 4. **Start.** Submit, then start seeds 0-2 once the laptop is free (the EpiDeNet runs finish about Nov 11). Seeds 0-2 finish about 8 days later; seeds 3-4 about 5 days after that.

@@ -1,6 +1,22 @@
 # EEG Compression Validity
 
-Does post-training quantization move a seizure detector along the false-alarm / latency trade-off that its window-level metrics cannot see? Pre-registration draft: `prereg/PREREGISTRATION_DRAFT.md`.
+Does post-training quantization move a seizure detector along the false-alarm / latency trade-off that its window-level metrics cannot see?
+
+## Status (2026-11-10)
+
+Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with two updates: update 1 (2026-11-10, `0bafefa`) after the FP32 sanity gate failed, and update 2 (2026-11-10, `819d4ad`) moving the confirmatory test to Ahlawat's model. Registered text: `prereg/OSF_FORM.md`, `prereg/OSF_UPDATE_FORM.md`, `prereg/OSF_UPDATE_AHLAWAT.md`.
+
+| Step | Result | Where |
+|---|---|---|
+| Stage 0: EpiDeNet, CHB-MIT, 3 seeds, 414 models | INT8 excess latency +0.22 s (no shift); simulated 4-bit +20.7 s. **Exploratory** (update 1) | `runs/stage0/RESULT.md` |
+| Registered FP32 sanity gate | **Failed**: detection 92.6% (pass), voted window FP/h 5.83 (needs 1.12-4.48) | `runs/stage0/sanity_gate.md`, `GATE_INVESTIGATION.md` |
+| Protocol-matched reimplementation check (update 1) | **Failed**: detection 95.1% (pass), voted window FP/h 15.56 | `runs/gate_check/sanity_gate.md` |
+| Table I recheck | Code matches every layer; MACs 0.005% apart. Under the registered rule, Ahlawat's model becomes primary | `runs/gate_check/TABLE_I_RECHECK.md` |
+| Recall at false-alarm caps (exploratory) | INT8 unchanged vs FP32 at 0.5, 1 and 2 per 24 h; 4-bit loses sensitivity | `runs/stage0/caps.md` |
+| Unweighted-loss rerun of the check; W4A8 and FP16 from Stage 0 weights (exploratory) | Running | `runs/gate_check_unweighted/`, `runs/stage0_bitwidths/` |
+| Confirmatory test: Ahlawat's model, seeds 0-4 (update 2) | Queued; interim report on seeds 0-2 | `runs/stage1_ahlawat/` |
+
+Draft paper text on the deviations: `paper/deviations_and_failed_gate.md`. Literature audit: `audit/AUDIT.md`.
 
 ## Layout
 
@@ -11,7 +27,7 @@ Does post-training quantization move a seizure detector along the false-alarm / 
 | `src/siena.py` | Siena: temporal-4 bipolar channels derived from referential T3/T4/T5/T6, 512 -> 256 Hz; validated seizure-list parser with documented corrections |
 | `src/seizeit2.py` | SeizeIT2 (BIDS): the subject's main two-channel behind-the-ear montage; seizures from `*_events.tsv` |
 | `src/epidenet.py` | EpiDeNet from its Table I (checked against the paper's MAC count; channel pooling adapts below 4 channels) |
-| `src/models.py` | Model specs: EpiDeNet (primary) and Ahlawat's 1D CNN (secondary) with their windows, rates and training settings |
+| `src/models.py` | Model specs: EpiDeNet (Stage 0) and Ahlawat's 1D CNN (primary from update 2) with their windows, rates and training settings |
 | `src/quantize.py` | ONNX Runtime static INT8 (primary), simulated 8/6/4-bit (dose-response), quantization-aware 8-bit training; W4A8 and simulated FP16 (exploratory) |
 | `src/pipeline.py` | One fold, any dataset / model / arm: train FP32, quantize, threshold, smooth, score with SzCORE, latency |
 | `src/scoring.py` | SzCORE event scoring and the plan's latency metric |
@@ -23,9 +39,10 @@ Does post-training quantization move a seizure detector along the false-alarm / 
 | `scripts/analyze_frontier.py` | Summary tables, frontier plots, gate checks, the Stage 0 kill rule |
 | `scripts/analyze_stats.py` | Stage 1 statistics: bootstrap intervals, mixed model, concentration, H3, FP/h ratio per patient; `--caps` recall at false-alarm caps; `--excess-only` |
 | `scripts/sanity_gate.py` | The registered FP32 sanity gate and the protocol-matched reimplementation check (`--protocol`, `--loss`) |
-| `scripts/rescore_bitwidths.py` | Exploratory: W4A8 and FP16 versions of finished Stage 0 models, from their saved weights |
+| `scripts/rescore_bitwidths.py` | Exploratory: W4A8 and FP16 versions of finished models, from their saved weights |
+| `scripts/check_epidenet.py`, `scripts/check_ahlawat.py` | Implementation checks: EpiDeNet's MAC count; Ahlawat's model against the EEGCNN class in his code |
 | `tests/test_core.py` | Correctness tests (scoring, alarm timing, folds, BN folding, quantization, QAT, endpoint, statistics, dataset counts) |
-| `runs/` | Outputs: `stage0/GATE.md` is the pipeline-gate report |
+| `runs/` | Outputs per run (see Status above); `pilot_chb01_v1/GATE.md` is the pipeline-gate report from the chb01 pilot |
 
 Every implementation choice the plan or EpiDeNet leaves open is listed in the docstring at the top of the module that makes it.
 
@@ -67,7 +84,7 @@ Later stages use the same runner (see its docstring for more):
 
 ```bash
 python scripts/run_patient.py --patients all --seeds 0 1 2 3 4 --out runs/stage1                 # 5 seeds
-python scripts/run_patient.py --model ahlawat --patients all --out runs/stage1_ahlawat           # primary after update 1
+python scripts/run_patient.py --model ahlawat --patients all --seeds 0 1 2 --out runs/stage1_ahlawat  # confirmatory (update 2), then --seeds 3 4
 python scripts/run_patient.py --arm cross --out runs/stage1_cross                                # leave one group out
 python scripts/run_patient.py --dataset siena --patients all --out runs/stage2_siena             # replication
 python scripts/run_patient.py --dataset seizeit2 --patients all --out runs/stage3_seizeit2       # wearable

@@ -1,4 +1,6 @@
-# Fidelity check and OSF registration update (draft, not yet registered or run)
+# Fidelity check and OSF registration update 1
+
+**Status:** registered on OSF as update 1 on 2026-11-10 (text: `prereg/OSF_UPDATE_FORM.md`; code at commit 0bafefa), then run. **Result: the check failed** (detection 95.1%, pass; voted window FP/h 15.56, outside 1.12-4.48; `runs/gate_check/sanity_gate.md`). The Table I recheck found no discrepancy (`runs/gate_check/TABLE_I_RECHECK.md`), so under item 4 below Ahlawat's model became primary, registered as update 2 (`prereg/OSF_UPDATE_AHLAWAT.md`). Item 5's cap analysis: `runs/stage0/caps.md`. The text below is the design as registered.
 
 Revised 2026-11-10 after advisor review (S. Aryal): Stage 0 is reported as exploratory whatever the check shows; the check now decides only which model later stages use. Added: an exploratory recall-at-false-alarm-cap analysis, and a hardware framing for the bit widths.
 
