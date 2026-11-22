@@ -2,7 +2,7 @@
 
 Early submission deadline: January 10, 2027 (free; $60 by January 17 if accepted). Conference: March 20, 2027, in person. Limit: 300 words.
 
-Status (2026-11-19): complete (revised: confirmatory CI read as an upper bound; fidelity check named). Possible later addition: if Ahlawat's W4A8 rescore also costs little, extend the W4A8 sentence to both detectors (needs matching cuts). EpiDeNet numbers are exploratory, as registered; the Ahlawat sentence is the confirmatory result (all 690 jobs on the workstation, OSF updates 3-5; fidelity check B passed, 87 of 120 patient-seeds). 299 words. Pending: advisor review, and the update 5 repeatability check (it cannot change the result).
+Status (2026-11-19): complete (revised: confirmatory CI read as an upper bound; fidelity check named). Possible later addition: if Ahlawat's W4A8 rescore also costs little, extend the W4A8 sentence to both detectors (needs matching cuts). EpiDeNet numbers are exploratory, as registered; the Ahlawat sentence is the confirmatory result (all 690 jobs on the workstation, OSF updates 3-5; fidelity check B passed, 87 of 120 patient-seeds). 299 words. Update 5 repeatability check: all 18 identical. Pending: advisor review.
 
 **Title:** Does Compressing a Wearable Seizure Detector Change When It Alarms? A Pre-Registered Test of 8-Bit Quantization
 

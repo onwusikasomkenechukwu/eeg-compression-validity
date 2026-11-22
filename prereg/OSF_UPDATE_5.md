@@ -1,6 +1,6 @@
 # OSF registration update 5: repeatability check of jobs run under GPU memory pressure
 
-**Status:** submitted on OSF on 2026-11-19, after the workstation run finished and before any analysis of it (including the W4A8/FP16 rescore). Same mechanics as before: each paragraph was appended to the end of its field. Reruns in `runs/repeat_oom/` on the workstation; outcome pending.
+**Status:** submitted on OSF on 2026-11-19, after the workstation run finished and before any analysis of it (including the W4A8/FP16 rescore). Same mechanics as before: each paragraph was appended to the end of its field. Outcome (2026-11-22): all 18 reruns identical to the originals, array by array; reruns deleted.
 
 ## Justification tab
 
