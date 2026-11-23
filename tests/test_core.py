@@ -420,3 +420,17 @@ def test_cache_concurrent_writers_never_expose_a_partial_file(tmp_path):
         assert np.array_equal(y, x.astype(np.float16))
     left = os.listdir(tmp_path / "ds" / "p01" / "tag")
     assert left == ["rec.npy"], left
+
+
+def test_siena_bipolar18_matches_ahlawat_montage():
+    """Siena's 18 derived channels are CHB-MIT's BIPOLAR18 in Siena's old 10-20 names, and
+    labels match whatever their case (the files spell EEG FP2 and EEG Fp2)."""
+    import siena
+    from chbmit import BIPOLAR18
+    new = {"T3": "T7", "T5": "P7", "T4": "T8", "T6": "P8"}
+    got = ["-".join(new.get(c[4:], c[4:]).upper() for c in pair) for pair in siena.CHANNEL_SETS["bipolar18"]]
+    assert got == BIPOLAR18
+    labels = ["EEG Fp1", "EEG FP2", "EEG CZ", "EEG Cz2"]
+    assert siena._find(labels, "EEG Fp2") == 1 and siena._find(labels, "EEG Cz") == 2
+    with pytest.raises(KeyError):
+        siena._find(labels, "EEG O1")

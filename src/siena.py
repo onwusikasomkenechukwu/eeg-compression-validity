@@ -3,7 +3,9 @@
   - 512 Hz referential EEG, old 10-20 names (T3/T4/T5/T6 = T7/T8/P7/P8). EpiDeNet's four
     temporal bipolar channels are built by subtraction: F7-T3, T3-T5, F8-T4, T4-T6 (the
     same derivations as CHB-MIT's F7-T7, T7-P7, F8-T8, T8-P8), then band-passed causally
-    at 512 Hz and decimated to 256 Hz (records.bandpass_causal).
+    at 512 Hz and decimated to 256 Hz (records.bandpass_causal). Ahlawat's 18 bipolar
+    channels (chbmit.BIPOLAR18) are derived the same way. Labels are matched ignoring case
+    (some files spell EEG FP2 and EEG CZ, others EEG Fp2 and EEG Cz).
   - Seizure times are parsed from Seizures-list-PNxx.txt, which mixes "." and ":" in clock
     times, spells some file names differently from the files (PNO6 for PN06, "PN11-" for
     PN11-1), and lists recordings that cross midnight. Clock times are converted to seconds
@@ -22,8 +24,24 @@ import pyedflib
 from records import FS, bandpass_causal, cached
 
 NAME = "siena"
-CHANNEL_SETS = {"temporal4": [("EEG F7", "EEG T3"), ("EEG T3", "EEG T5"), ("EEG F8", "EEG T4"), ("EEG T4", "EEG T6")]}
-TAGS = {"temporal4": "temporal4_bp0.5-40_causal4_ds2_f16_v1"}
+_OLD = {"T7": "T3", "P7": "T5", "T8": "T4", "P8": "T6"}  # modern 10-20 names -> Siena's
+
+
+def _bipolar(pairs):
+    """CHB-MIT-style bipolar names ("FP1-F7") -> Siena referential label pairs."""
+    lab = lambda e: "EEG " + _OLD.get(e, e)
+    return [tuple(lab(e) for e in pair.split("-")) for pair in pairs]
+
+
+CHANNEL_SETS = {
+    "temporal4": [("EEG F7", "EEG T3"), ("EEG T3", "EEG T5"), ("EEG F8", "EEG T4"), ("EEG T4", "EEG T6")],
+    # Ahlawat's 18 channels (chbmit.BIPOLAR18), derived by subtraction like temporal4
+    "bipolar18": _bipolar([
+        "FP1-F7", "F7-T7", "T7-P7", "P7-O1", "FP1-F3", "F3-C3", "C3-P3", "P3-O1",
+        "FP2-F4", "F4-C4", "C4-P4", "P4-O2", "FP2-F8", "F8-T8", "T8-P8", "P8-O2", "FZ-CZ", "CZ-PZ"]),
+}
+TAGS = {"temporal4": "temporal4_bp0.5-40_causal4_ds2_f16_v1",
+        "bipolar18": "bipolar18_bp0.5-40_causal4_ds2_f16_v1"}
 EXPECTED_SEIZURES = 47
 
 # Errors in the published seizure lists, corrected explicitly (state in the pre-registration).
@@ -116,13 +134,31 @@ def seizures(edf_path):
     return _patient_seizures(root, patient)[edf_path]
 
 
+def _find(labels, name):
+    """Index of a channel label, ignoring case: the files spell some labels differently
+    (EEG Fp2 / EEG FP2, EEG Cz / EEG CZ)."""
+    hits = [i for i, l in enumerate(labels) if l.strip().upper() == name.upper()]
+    if len(hits) != 1:
+        raise KeyError(f"{name}: {len(hits)} matching labels")
+    return hits[0]
+
+
+def has_channels(labels, channels):
+    try:
+        for pair in CHANNEL_SETS[channels]:
+            for ch in pair:
+                _find(labels, ch)
+        return True
+    except KeyError:
+        return False
+
+
 def usable_records(root, patient, channels="temporal4"):
-    need = {ch for pair in CHANNEL_SETS[channels] for ch in pair}
-    return [(p, bool(seizures(p))) for p in list_records(root, patient) if need <= set(_header(p)[0])]
+    return [(p, bool(seizures(p))) for p in list_records(root, patient) if has_channels(_header(p)[0], channels)]
 
 
 def load_record(edf_path, cache_root=None, channels="temporal4"):
-    """Returns (x, seizure events, duration): x is (4, n) float16 microvolts at FS."""
+    """Returns (x, seizure events, duration): x is (C, n) float16 microvolts at FS."""
     events = seizures(edf_path)
 
     def compute():
@@ -132,7 +168,7 @@ def load_record(edf_path, cache_root=None, channels="temporal4"):
             for a, b in CHANNEL_SETS[channels]:
                 for ch in (a, b):
                     if ch not in sig:
-                        i = labels.index(ch)
+                        i = _find(labels, ch)
                         assert f.getSampleFrequency(i) == 512, f"{edf_path}: {ch} not 512 Hz"
                         sig[ch] = f.readSignal(i)
         raw = np.stack([sig[a] - sig[b] for a, b in CHANNEL_SETS[channels]])

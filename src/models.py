@@ -62,5 +62,5 @@ SPECS = {
                           channels={"chbmit": "temporal4", "siena": "temporal4", "seizeit2": "bte2"},
                           lr=1e-3, max_epochs=300, patience=10),
     "ahlawat": ModelSpec("ahlawat", lambda c: AhlawatCNN(n_channels=c), win_s=8, decim=2, layout="1d",
-                         channels={"chbmit": "bipolar18"}, lr=1e-4, max_epochs=200, patience=20),
+                         channels={"chbmit": "bipolar18", "siena": "bipolar18"}, lr=1e-4, max_epochs=200, patience=20),
 }
