@@ -403,3 +403,20 @@ def test_rescore_fold_rebuilds_a_finished_job_exactly(tmp_path, model):
     assert {r["thr_mode"] for r in res["frontier"]} == {"own", "fp32"}
     assert res["thresholds"]["fp32"] == pytest.approx(summary["thresholds"]["fp32"], abs=1e-6)
     assert len(out["test_w4a8"]) == len(arrays["test_fp32"])
+
+
+# --- signal cache ----------------------------------------------------------------------------
+
+def test_cache_concurrent_writers_never_expose_a_partial_file(tmp_path):
+    """Runners sharing a cache may compute the same record at once (the first workstation launch
+    crashed on this): every reader must get the complete array, and no temporary file may remain."""
+    from concurrent.futures import ThreadPoolExecutor
+    from records import cached
+    x = np.arange(256 * 600 * 4, dtype=np.float32).reshape(4, -1) % 1000
+    load = lambda _: np.asarray(cached(str(tmp_path), "ds", "p01", "tag", "rec", lambda: x))
+    with ThreadPoolExecutor(8) as ex:
+        out = list(ex.map(load, range(16)))
+    for y in out:
+        assert np.array_equal(y, x.astype(np.float16))
+    left = os.listdir(tmp_path / "ds" / "p01" / "tag")
+    assert left == ["rec.npy"], left

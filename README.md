@@ -2,9 +2,9 @@
 
 Does post-training quantization move a seizure detector along the false-alarm / latency trade-off that its window-level metrics cannot see?
 
-## Status (2026-11-10)
+## Status (2026-11-23)
 
-Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with two updates: update 1 (2026-11-10, `0bafefa`) after the FP32 sanity gate failed, and update 2 (2026-11-10, `819d4ad`) moving the confirmatory test to Ahlawat's model. Registered text: `prereg/OSF_FORM.md`, `prereg/OSF_UPDATE_FORM.md`, `prereg/OSF_UPDATE_AHLAWAT.md`.
+Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with five updates: update 1 (2026-11-10, `0bafefa`) after the FP32 sanity gate failed; update 2 (2026-11-10, `819d4ad`) moving the confirmatory test to Ahlawat's model; update 3 (2026-11-17, `58d8708`) restarting that run on a GPU workstation; update 4 (2026-11-17) recording the workstation details; update 5 (2026-11-19) adding a repeatability check of jobs run under GPU memory pressure. Registered text: `prereg/OSF_FORM.md`, `prereg/OSF_UPDATE_FORM.md`, `prereg/OSF_UPDATE_AHLAWAT.md`, `prereg/OSF_UPDATE_WORKSTATION.md`, `prereg/OSF_UPDATE_4.md`, `prereg/OSF_UPDATE_5.md`.
 
 | Step | Result | Where |
 |---|---|---|
@@ -13,8 +13,12 @@ Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with two updates: update 
 | Protocol-matched reimplementation check (update 1) | **Failed**: detection 95.1% (pass), voted window FP/h 15.56 | `runs/gate_check/sanity_gate.md` |
 | Table I recheck | Code matches every layer; MACs 0.005% apart. Under the registered rule, Ahlawat's model becomes primary | `runs/gate_check/TABLE_I_RECHECK.md` |
 | Recall at false-alarm caps (exploratory) | INT8 unchanged vs FP32 at 0.5, 1 and 2 per 24 h; 4-bit loses sensitivity | `runs/stage0/caps.md` |
-| Unweighted-loss rerun of the check; W4A8 and FP16 from Stage 0 weights (exploratory) | Running | `runs/gate_check_unweighted/`, `runs/stage0_bitwidths/` |
-| Confirmatory test: Ahlawat's model, seeds 0-4 (update 2) | Queued; interim report on seeds 0-2 | `runs/stage1_ahlawat/` |
+| Unweighted-loss rerun of the check (exploratory) | Also fails: detection 92.6%, voted window FP/h 12.18 | `runs/gate_check_unweighted/` |
+| W4A8 and FP16 from Stage 0 weights (exploratory) | W4A8 +0.50 s, FP16 0.00 s; no sensitivity change at any cap | `runs/stage0_bitwidths/` |
+| Confirmatory test: Ahlawat's model, 24 patients x 5 seeds, 690 models (updates 2-5) | Fidelity check passed (87/120 patient-seeds). **H1 not supported**: INT8 excess latency -0.13 s (95% CI -0.30 to 0.00); 4-bit +16.17 s; INT8 unchanged at every cap. 18 jobs rerun under update 5: all identical | `runs/stage1_ahlawat_ws/` |
+| W4A8 and FP16 of the confirmatory models (exploratory) | W4A8 0.00 s, FP16 0.00 s; no sensitivity change at any cap | `runs/stage1_ahlawat_ws_bitwidths/` |
+
+The laptop's partial CPU run of the confirmatory test (236 jobs, stopped under update 3) is set aside in `runs/stage1_ahlawat/`, not part of any result.
 
 Draft paper text on the deviations: `paper/deviations_and_failed_gate.md`. Literature audit: `audit/AUDIT.md`.
 
@@ -84,7 +88,7 @@ Later stages use the same runner (see its docstring for more):
 
 ```bash
 python scripts/run_patient.py --patients all --seeds 0 1 2 3 4 --out runs/stage1                 # 5 seeds
-python scripts/run_patient.py --model ahlawat --patients all --seeds 0 1 2 --out runs/stage1_ahlawat  # confirmatory (update 2), then --seeds 3 4
+python scripts/run_patient.py --model ahlawat --patients all --seeds 0 1 2 --workers 0 --gpu-workers 2 --gpu-device cuda --out runs/stage1_ahlawat_ws  # confirmatory (update 3): one runner per GPU, then --seeds 3 4
 python scripts/run_patient.py --arm cross --out runs/stage1_cross                                # leave one group out
 python scripts/run_patient.py --dataset siena --patients all --out runs/stage2_siena             # replication
 python scripts/run_patient.py --dataset seizeit2 --patients all --out runs/stage3_seizeit2       # wearable
@@ -116,7 +120,9 @@ Patients with fewer than 3 usable seizure records are skipped with a message (th
 
 - **The CPU thread count is part of the environment.** Floating-point addition is not associative, and different `--threads` values split each sum differently, so training drifts to a slightly different model (chb01 fold 0: 4 vs 8 threads gave score correlation 0.995, like a small seed change). Stage 0 and the pilot use 4; each job records it (`environment.cpu_threads`).
 - **Confirmatory environment (Stage 0):** WSL2 Ubuntu, Python 3.12, torch 2.14.1 CPU build, packages as in `requirements.txt`, 4 threads per job, CPU only.
-- A job is deterministic on a given device, software stack and thread count: re-running it reproduces every number exactly (checked on Linux CPU with torch 2.14.1 and on DirectML with torch 2.4.1; CUDA runs use deterministic cuDNN settings but have not been tested here).
+- **Confirmatory environment (Ahlawat, update 3):** Ubuntu 26.04.1, Python 3.12.15, torch 2.14.1+cu132 (cuDNN 9.24.0, driver 595.99.02), 2 x RTX 4090; training and QAT on the GPU, quantization and scoring on the CPU with 4 threads per job; 2 jobs per GPU.
+- **Runners sharing a cache:** since the cache-write fix after the Ahlawat run, concurrent runners may build the same cache at once. The confirmatory run predates the fix and started its second runner only after the first had built the cache.
+- A job is deterministic on a given device, software stack and thread count: re-running it reproduces every number exactly (checked on Linux CPU with torch 2.14.1 and on DirectML with torch 2.4.1; and on CUDA with torch 2.14.1+cu132 and deterministic cuDNN: the update 3 and update 5 repeatability checks, 19 jobs in all, were bit-identical).
 - **Different devices or torch versions train slightly different models**, much like a different seed (on one chb01 fold: identical alarm counts and latencies, window AUROC 0.979 on CPU vs 0.995 on DirectML). The primary comparison is paired inside each job, so it is unaffected; each job records its device and versions, so the seed null can be restricted to same-device pairs as a sensitivity check. The confirmatory Stage 0 run therefore uses the single pinned environment above.
 - The ONNX export uses the TorchScript exporter (`dynamo=False`), which newer torch releases deprecate; keep torch pinned.
 

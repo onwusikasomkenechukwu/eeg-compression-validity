@@ -7,6 +7,7 @@ Every dataset module (chbmit, siena, seizeit2) exposes the same interface:
 and returns signals at FS (256 Hz) as float16 microvolts.
 """
 import os
+import uuid
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -37,9 +38,16 @@ def cached(cache_root, dataset, patient, tag, name, compute):
         if x is None:
             return None
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp.npy"
-        np.save(tmp, x.astype(np.float16))
-        os.replace(tmp, path)
+        # A temporary name unique to this writer: runners sharing a cache may compute the same
+        # record at once, and a shared name let one runner read another's half-written file.
+        # The rename is atomic, so readers see either no file or a complete one.
+        tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp.npy"
+        try:
+            np.save(tmp, x.astype(np.float16))
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
     return np.load(path, mmap_mode="r")
 
 
