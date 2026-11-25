@@ -215,15 +215,19 @@ def epidenet_metrics(test, scores, labels, thr, g=EPIDENET):
 
 
 def train_fp32(X, y, Xv, yv, mean, std, seed, device_name, log, spec=SPECS["epidenet"], g=EPIDENET,
-               class_weight="inverse"):
+               class_weight="inverse", init_state=None):
+    """FP32 training from a fresh initialization, or fine-tuning from init_state (a pre-trained
+    state dict, pipeline.pretrain) when the model is pre-trained."""
     torch.manual_seed(seed)  # initialization is drawn on the CPU, so it is the same on every device
     model = spec.make(X.shape[1])
+    if init_state is not None:
+        model.load_state_dict(init_state)
     return fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, spec.lr, spec.max_epochs, spec.patience, g,
-               class_weight)
+               class_weight, batch=spec.batch)
 
 
 def fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, lr, max_epochs, patience, g=EPIDENET,
-        class_weight="inverse"):
+        class_weight="inverse", batch=BATCH):
     """Training with early stopping on validation loss; returns the best epoch's model on the
     CPU, in eval mode. Shared by FP32 training and QAT fine-tuning. class_weight "inverse"
     (every registered run) weights the seizure class by the background:seizure ratio of the
@@ -248,8 +252,8 @@ def fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, lr, max_epochs, 
         te = time.perf_counter()
         model.train()
         perm = torch.randperm(len(yt), generator=gen).to(device)
-        for i in range(0, len(perm), BATCH):
-            idx = perm[i:i + BATCH]
+        for i in range(0, len(perm), batch):
+            idx = perm[i:i + batch]
             opt.zero_grad()
             loss_fn(model(Xt[idx]), yt[idx]).backward()
             opt.step()
@@ -273,11 +277,16 @@ def fit(model, X, y, Xv, yv, mean, std, seed, device_name, log, lr, max_epochs, 
                    "stopped_early": bad >= patience, "best_val_loss": best}
 
 
-def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, device="cpu", log=print):
+def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, device="cpu", log=print,
+             pretrained=None):
     """Train FP32 on fold k, quantize it, and evaluate every model. ds is a dataset module
     (chbmit, siena, seizeit2). Returns (summary, arrays): summary is JSON-serializable; arrays
-    holds raw scores, trained weights and normalization for later analysis."""
+    holds raw scores, trained weights and normalization for later analysis. A pre-trained model
+    (spec.pretrain_epochs > 0, EEGformer) needs `pretrained`, the arrays pipeline.pretrain saved
+    for this patient and seed; FP32 training then fine-tunes those weights."""
     spec = SPECS[model]
+    if spec.pretrain_epochs and pretrained is None:
+        raise ValueError(f"model {model} is fine-tuned from pre-trained weights: pass pretrained=")
     g = Geometry(spec)
     channels = spec.channels[ds.NAME]
     torch.set_num_threads(threads)
@@ -309,7 +318,8 @@ def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, devi
     log(f"train windows {len(y)} ({y.sum()} seizure), val windows {len(yvg)} ({yvg.sum()} seizure, window grid)")
 
     t0 = time.perf_counter()
-    model_fp32, tinfo = train_fp32(X, y, Xvg, yvg, mean, std, seed, device, log, spec, g)
+    init = pretrained_state(pretrained) if pretrained is not None else None
+    model_fp32, tinfo = train_fp32(X, y, Xvg, yvg, mean, std, seed, device, log, spec, g, init_state=init)
     t.update(tinfo)
     t["train_s"] = time.perf_counter() - t0
 
@@ -324,7 +334,7 @@ def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, devi
 
     t0 = time.perf_counter()
     qat, qinfo = fit(QAT(model_fp32, 8).calibrate(calib), X, y, Xvg, yvg, mean, std, seed, device, log,
-                     QAT_LR, QAT_MAX_EPOCHS, QAT_PATIENCE, g)
+                     QAT_LR, QAT_MAX_EPOCHS, QAT_PATIENCE, g, batch=spec.batch)
     fns["qat8"] = qat
     t["qat"] = qinfo
     t["qat_s"] = time.perf_counter() - t0
@@ -380,6 +390,9 @@ def run_fold(folds, k, cache_root, ds, model="epidenet", seed=0, threads=4, devi
         "thresholds": thr,
         "spec_in_band": abs(window["fp32"]["specificity"] - TARGET_SPEC) <= SPEC_TOLERANCE,
         "onnx_fp32_max_abs_logit_diff": onnx_diff,
+        "onnx_int8_ops": onnx.quantized_ops,
+        **({"pretrained": pretrained_info(pretrained)}
+           if pretrained is not None else {}),
         "window": window,
         "frontier": rows,
         "timing": t,
@@ -581,3 +594,146 @@ def rescore_fold(folds, k, cache_root, ds, arrays, variants=("w4a8", "fp16"), mo
                "window": window, "frontier": rows, "timing": {"total_s": time.perf_counter() - t0}}
     arrays_out = {f"test_{n}": np.concatenate(test_scores[n]).astype(np.float32) for n in variants}
     return summary, arrays_out
+
+
+# --- EEGformer: subject-independent pre-training and the protocol-matched check ------------------
+
+PRETRAIN_HOLDOUT = 0.2  # the paper's random 8:2 training/validation split
+
+
+def load_records(paths, cache_root, ds, channels, g):
+    """[(path, (x, events, duration))] at the model's input rate, skipping records without the channels."""
+    out = []
+    for p in paths:
+        x, events, dur = ds.load_record(p, cache_root, channels)
+        if x is not None:
+            out.append((p, (x[:, ::g.decim] if g.decim > 1 else x, events, dur)))
+    return out
+
+
+def pretrain(pool_paths, cache_root, ds, model="eegformer", seed=0, threads=4, device="cpu", log=print):
+    """Subject-independent pre-training (EEGformer's first phase) on the records in pool_paths:
+    the seizure records of patients other than the test patient (other people only: CHB-MIT's
+    chb01 and chb21 count as one). Training windows as in run_fold (seizure windows every 1 s,
+    background windows sampled at BG_PER_SZ per seizure window); a stratified random
+    PRETRAIN_HOLDOUT of them is held out to pick the best epoch; class-weighted cross-entropy;
+    normalization from the pool's training windows. Returns (summary, arrays); arrays holds the
+    pre-trained weights (w_pre__*) for run_fold and run_eegformer_check."""
+    spec = SPECS[model]
+    g = Geometry(spec)
+    channels = spec.channels[ds.NAME]
+    torch.set_num_threads(threads)
+    rng = np.random.default_rng(seed)
+    t0 = time.perf_counter()
+    recs = [r for _, r in load_records(pool_paths, cache_root, ds, channels, g)]
+    X_all, y_all = train_windows(recs, rng, g)
+    held = stratified_holdout(y_all, PRETRAIN_HOLDOUT, rng)
+    X, y, Xh, yh = X_all[~held], y_all[~held], X_all[held], y_all[held]
+    del X_all
+    mean = X.astype(np.float32).mean(axis=(0, 2), keepdims=True)[0]
+    std = X.astype(np.float32).std(axis=(0, 2), keepdims=True)[0] + 1e-6
+    log(f"pre-training pool: {len(recs)} records, {len(y)} windows ({y.sum()} seizure), "
+        f"held out {len(yh)} ({yh.sum()} seizure)")
+    torch.manual_seed(seed)
+    net, info = fit(spec.make(X.shape[1]), X, y, Xh, yh, mean, std, seed, device, log, spec.lr,
+                    spec.pretrain_epochs, spec.pretrain_patience, Geometry(spec), batch=spec.batch)
+    summary = {"model": model, "dataset": ds.NAME, "seed": seed, "device": device, "environment": describe(device),
+               "pool_records": len(recs), "pool_windows": int(len(y)), "pool_seizure_windows": int(y.sum()),
+               "holdout_windows": int(len(yh)), "training": info,
+               "timing": {"total_s": time.perf_counter() - t0}}
+    arrays = {"pre_norm_mean": mean, "pre_norm_std": std, "pool_records": np.array(len(recs)),
+              "pool_windows": np.array(len(y)),
+              **{f"w_pre__{n}": v.numpy() for n, v in net.state_dict().items()}}
+    return summary, arrays
+
+
+def _keys(arrays):
+    return arrays.files if hasattr(arrays, "files") else list(arrays)
+
+
+def pretrained_state(arrays):
+    """The pre-trained state dict saved by pretrain (its arrays dict or .npz)."""
+    return {k[len("w_pre__"):]: torch.from_numpy(np.array(arrays[k])) for k in _keys(arrays) if k.startswith("w_pre__")}
+
+
+def pretrained_info(arrays):
+    return {k: int(np.array(arrays[k])) if k in _keys(arrays) else None for k in ("pool_records", "pool_windows")}
+
+
+CHECK_HOP_S = 2           # EEGformer's test windows: 8 s, every 2 s
+POSTICTAL_IGNORE_S = 900  # false positives within 15 min after a seizure's end are ignored
+
+
+def eegformer_event_metrics(rec, pred, g):
+    """EEGformer's CHB-MIT evaluation of one test record (Busia et al. 2024, Sec. IV): windows
+    every CHECK_HOP_S, the predicted class, a majority vote over 3 consecutive windows (2 of 3,
+    causal). A seizure is detected when a voted-positive window is one of its seizure windows (at
+    least half seizure); latency as the paper counts it: that seizure's windows before the first
+    detection times the hop, plus one hop for the vote. False positives: voted-positive windows
+    that touch no seizure and do not end within POSTICTAL_IGNORE_S after a seizure's end;
+    consecutive ones count as one event."""
+    x, events, dur = rec
+    hop = CHECK_HOP_S * g.fs
+    starts = window_starts(x.shape[1], g.win, hop)
+    v = smooth_votes(np.asarray(pred, bool))
+    frac = seizure_fraction(starts, g.win, events, x.shape[1], g.fs)
+    ends_s = (starts + g.win) / g.fs
+    detected, lat, sz_windows, sz_tp = 0, [], 0, 0
+    for on, off in events:
+        own = seizure_fraction(starts, g.win, [(on, off)], x.shape[1], g.fs) >= 0.5
+        sz_windows += int(own.sum())
+        sz_tp += int((v & own).sum())
+        hit = np.flatnonzero(v[own])
+        if len(hit):
+            detected += 1
+            lat.append(float(hit[0] * CHECK_HOP_S + CHECK_HOP_S))
+    post = np.zeros(len(starts), bool)
+    for _, off in events:
+        post |= (ends_s > off) & (ends_s <= off + POSTICTAL_IGNORE_S)
+    fp = v & (frac == 0) & ~post
+    fp_events = int((fp & ~np.concatenate([[False], fp[:-1]])).sum())
+    return {"seizures": len(events), "detected": detected, "latencies_s": lat,
+            "seizure_windows": sz_windows, "seizure_windows_detected": sz_tp,
+            "fp_windows": int(fp.sum()), "fp_events": fp_events, "negative_windows": int((frac == 0).sum()),
+            "hours": dur / 3600}
+
+
+def run_eegformer_check(folds, k, cache_root, ds, pretrained, model="eegformer", seed=0, threads=4,
+                        device="cpu", log=print):
+    """Fidelity check C (update 8), FP32 only: EEGformer's CHB-MIT protocol on chb01-chb08.
+    folds: one seizure record each (records.loocv_seizure_folds). Fine-tunes `pretrained`
+    (pre-trained on the seizure records of the other chb01-08 patients) on the patient's other
+    seizure records, a stratified random PRETRAIN_HOLDOUT of the training windows picking the best
+    epoch; tests on fold k with the predicted class (probability > 0.5) and
+    eegformer_event_metrics. Training windows, preprocessing and loss as in run_fold."""
+    spec = SPECS[model]
+    g = Geometry(spec)
+    channels = spec.channels[ds.NAME]
+    torch.set_num_threads(threads)
+    rng = np.random.default_rng(seed)
+    t0 = time.perf_counter()
+    test = load_records(folds[k], cache_root, ds, channels, g)
+    train = load_records([p for i, f in enumerate(folds) if i != k for p in f], cache_root, ds, channels, g)
+    X_all, y_all = train_windows([r for _, r in train], rng, g)
+    held = stratified_holdout(y_all, PRETRAIN_HOLDOUT, rng)
+    X, y, Xh, yh = X_all[~held], y_all[~held], X_all[held], y_all[held]
+    mean = X.astype(np.float32).mean(axis=(0, 2), keepdims=True)[0]
+    std = X.astype(np.float32).std(axis=(0, 2), keepdims=True)[0] + 1e-6
+    log(f"fine-tuning windows {len(y)} ({y.sum()} seizure), held out {len(yh)} ({yh.sum()} seizure)")
+    net, info = train_fp32(X, y, Xh, yh, mean, std, seed, device, log, spec, g,
+                           init_state=pretrained_state(pretrained))
+    metrics, scores = [], []
+    for _, r in test:
+        Xr, _ = eval_windows(r, g, hop=CHECK_HOP_S * g.fs)
+        p = predict(net, Xr, mean, std, g)
+        scores.append(p)
+        metrics.append(eegformer_event_metrics(r, alarm_raw(p, 0.5), g))
+    summary = {"protocol": "eegformer", "dataset": ds.NAME, "model": model, "channels": channels,
+               "fold": k, "seed": seed, "device": device, "environment": describe(device),
+               "test_records": [p.replace("\\", "/").split("/")[-1] for p, _ in test],
+               "train_records": len(train), "train_windows": int(len(y)), "train_seizure_windows": int(y.sum()),
+               "pretrained": pretrained_info(pretrained), "training": info, "check": metrics,
+               "timing": {"total_s": time.perf_counter() - t0}}
+    arrays = {"test_fp32": np.concatenate(scores).astype(np.float32), "norm_mean": mean, "norm_std": std,
+              **{f"w_fp32__{n}": v.numpy() for n, v in net.state_dict().items()}}
+    return summary, arrays

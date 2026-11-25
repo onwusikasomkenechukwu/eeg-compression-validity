@@ -1,12 +1,14 @@
 """Run (fold, seed) jobs: train FP32, quantize, score. Any dataset, model and arm.
 
   --dataset chbmit | siena | seizeit2      (data under data/<dataset> unless --data-root)
-  --model   epidenet | ahlawat             (models.SPECS; ahlawat needs chbmit's 18 channels)
+  --model   epidenet | ahlawat | eegformer (models.SPECS; ahlawat needs chbmit's 18 channels)
   --arm     patient (patient-specific folds, one unit per patient)
             cross   (leave one patient group out; a single unit "xpat")
   --protocol plan     (the registered design: run_fold, FP32 + quantized models)
              epidenet (the reimplementation check, prereg/FIDELITY_UPDATE.md: EpiDeNet's
                        leave-one-seizure-record-out, FP32 only; patient arm only)
+             eegformer (fidelity check C of update 8: EEGformer's own CHB-MIT protocol on
+                       chb01-chb08, FP32 only; --model eegformer)
   --loss    weighted   (default; every registered run)
             unweighted (epidenet protocol only: plain cross-entropy, the exploratory
                         post hoc test of the failed check; output runs/gate_check_unweighted)
@@ -17,6 +19,13 @@ Each job writes
   <out>/<unit>/fold<k>_seed<s>.log    training log, then "ok" or the traceback
 In the cross arm each fold's summary carries its test group as "patient", so the analysis
 reads every arm the same way.
+
+Pre-trained models (EEGformer): every (patient, seed) first gets a pre-training job, written to
+  <out>/_pretrain/<patient>_seed<s>.json / .npz / .log
+on the seizure records of every other person (plan protocol: all other CHB-MIT patients;
+eegformer protocol: the other chb01-08 patients). All pre-training jobs are queued before any
+fold job; a fold job waits for its patient-seed's pre-trained weights (written by this runner
+or another one sharing the folder) and fails if that pre-training failed.
 
 Resumable: a job whose JSON exists is skipped. Jobs are claimed with an exclusive
 <stem>.claim file, so several runners (CPU and GPU, or several machines sharing the output
@@ -67,18 +76,57 @@ def build_folds(ds, data_root, arm, unit, channels, protocol="plan"):
     from records import cross_patient_folds, loocv_seizure_folds, make_folds
     if arm == "cross":
         return cross_patient_folds(ds, data_root, channels)
-    make = loocv_seizure_folds if protocol == "epidenet" else make_folds
+    make = loocv_seizure_folds if protocol in ("epidenet", "eegformer") else make_folds
     return make(ds.usable_records(data_root, unit, channels)), None
 
 
+CHECK_PATIENTS = [f"chb{i:02d}" for i in range(1, 9)]  # EEGformer's CHB-MIT evaluation set
+PRETRAIN_WAIT_S = 24 * 3600
+
+
+def pretrain_pool(ds, data_root, unit, channels, protocol):
+    """Seizure records of every other person: all other patients (plan protocol) or the other
+    chb01-08 patients (eegformer protocol). Patient groups keep one person's patients together."""
+    groups = ds.patient_groups(data_root)
+    own = next(g for g in groups if unit in g)
+    allowed = set(CHECK_PATIENTS) if protocol == "eegformer" else None
+    return [p for g in groups if g != own for pat in g if allowed is None or pat in allowed
+            for p, has in ds.usable_records(data_root, pat, channels) if has]
+
+
+def pretrain_stem(out_dir, unit, seed):
+    return os.path.join(out_dir, "_pretrain", f"{unit}_seed{seed}")
+
+
+def _wait_for_pretrain(stem):
+    """Block until the pre-trained weights exist; raise if their job failed or never ran."""
+    t0 = time.time()
+    while not os.path.exists(stem + ".json"):
+        if os.path.exists(stem + ".log") and not os.path.exists(stem + ".claim"):
+            with open(stem + ".log") as f:
+                if "FAILED" in f.read():
+                    raise RuntimeError(f"pre-training {os.path.basename(stem)} failed")
+        if time.time() - t0 > PRETRAIN_WAIT_S:
+            raise RuntimeError(f"pre-training {os.path.basename(stem)} not finished after {PRETRAIN_WAIT_S} s")
+        time.sleep(30)
+
+
 def _job(args):
-    dataset, model, arm, protocol, loss, unit, k, seed, data_root, cache, out_dir, threads = args
+    dataset, model, arm, protocol, loss, unit, k, seed, data_root, cache, out_dir, threads, smoke = args
     import numpy as np
     from models import SPECS
-    from pipeline import run_fold, run_reimplementation_check
+    from pipeline import pretrain, run_eegformer_check, run_fold, run_reimplementation_check
+    if smoke:  # pipeline test on real data: 2 epochs everywhere; never used for results
+        import dataclasses
+        import pipeline
+        sp = SPECS[model]
+        SPECS[model] = dataclasses.replace(sp, max_epochs=2, patience=2,
+                                           pretrain_epochs=min(sp.pretrain_epochs, 2), pretrain_patience=2)
+        pipeline.QAT_MAX_EPOCHS = 1
 
     ds = importlib.import_module(dataset)
-    stem = os.path.join(out_dir, unit, f"fold{k}_seed{seed}")
+    is_pre = k == "pretrain"
+    stem = pretrain_stem(out_dir, unit, seed) if is_pre else os.path.join(out_dir, unit, f"fold{k}_seed{seed}")
     try:
         fd = os.open(stem + ".claim", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, f"{os.getpid()} {_DEVICE} {time.ctime()}".encode())
@@ -88,18 +136,31 @@ def _job(args):
     if os.path.exists(stem + ".json"):  # finished by another runner after we listed it
         os.remove(stem + ".claim")
         return unit, k, seed, _DEVICE, "skipped (done)", 0.0
+    if is_pre and os.path.exists(stem + ".log"):  # a failed earlier attempt: waiters must not read it
+        os.remove(stem + ".log")
 
     log_lines = []
     status = "FAILED"
     t0 = time.perf_counter()
     try:
-        folds, names = build_folds(ds, data_root, arm, unit, SPECS[model].channels[dataset], protocol)
+        channels = SPECS[model].channels[dataset]
         kw = dict(model=model, seed=seed, threads=threads, device=_DEVICE, log=log_lines.append)
-        if protocol == "epidenet":
-            summary, arrays = run_reimplementation_check(folds, k, cache, ds, loss=loss, **kw)
+        if is_pre:
+            summary, arrays = pretrain(pretrain_pool(ds, data_root, unit, channels, protocol), cache, ds, **kw)
+            summary["protocol"] = protocol
         else:
-            summary, arrays = run_fold(folds, k, cache, ds, **kw)
-        summary["patient"] = names[k] if arm == "cross" else unit
+            folds, names = build_folds(ds, data_root, arm, unit, channels, protocol)
+            pre = None
+            if SPECS[model].pretrain_epochs:
+                _wait_for_pretrain(pretrain_stem(out_dir, unit, seed))
+                pre = dict(np.load(pretrain_stem(out_dir, unit, seed) + ".npz"))
+            if protocol == "epidenet":
+                summary, arrays = run_reimplementation_check(folds, k, cache, ds, loss=loss, **kw)
+            elif protocol == "eegformer":
+                summary, arrays = run_eegformer_check(folds, k, cache, ds, pre, **kw)
+            else:
+                summary, arrays = run_fold(folds, k, cache, ds, pretrained=pre, **kw)
+        summary["patient"] = names[k] if (arm == "cross" and not is_pre) else unit
         summary["arm"] = arm
         summary["timing"]["total_s"] = time.perf_counter() - t0
         np.savez_compressed(stem + ".npz", **arrays)
@@ -119,10 +180,11 @@ def _job(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="chbmit", choices=["chbmit", "siena", "seizeit2"])
-    ap.add_argument("--model", default="epidenet", choices=["epidenet", "ahlawat"])
+    ap.add_argument("--model", default="epidenet", choices=["epidenet", "ahlawat", "eegformer"])
     ap.add_argument("--arm", default="patient", choices=["patient", "cross"])
-    ap.add_argument("--protocol", default="plan", choices=["plan", "epidenet"],
-                    help="epidenet: the FP32 reimplementation check (patient arm only)")
+    ap.add_argument("--protocol", default="plan", choices=["plan", "epidenet", "eegformer"],
+                    help="epidenet: the FP32 reimplementation check (patient arm only); "
+                         "eegformer: EEGformer's fidelity check C on chb01-08 (FP32 only)")
     ap.add_argument("--loss", default="weighted", choices=["weighted", "unweighted"],
                     help="unweighted: plain cross-entropy (epidenet protocol only; exploratory)")
     ap.add_argument("--patients", nargs="+", default=["chb01"],
@@ -139,16 +201,29 @@ def main():
     ap.add_argument("--cache", default=os.path.expanduser(os.path.join("~", "eegcv_cache")),
                     help="preprocessed-signal cache root; keep it on a local disk")
     ap.add_argument("--out", default=None, help="default: runs/stage0 (plan) or runs/gate_check (epidenet)")
+    ap.add_argument("--smoke", action="store_true",
+                    help="pipeline test on real data: 2 epochs for every training phase (needs --out)")
     ap.add_argument("--clear-claims", action="store_true",
                     help="delete leftover .claim files first (only when no other runner is active)")
     args = ap.parse_args()
-    if args.protocol == "epidenet" and args.arm != "patient":
-        sys.exit("--protocol epidenet runs on the patient arm only")
+    if args.smoke and not args.out:
+        sys.exit("--smoke needs an explicit --out (never a results folder)")
+    if args.protocol != "plan" and args.arm != "patient":
+        sys.exit(f"--protocol {args.protocol} runs on the patient arm only")
+    if args.protocol == "eegformer" and args.model != "eegformer":
+        sys.exit("--protocol eegformer needs --model eegformer")
+    if args.model == "eegformer" and args.protocol == "epidenet":
+        sys.exit("--model eegformer runs with --protocol plan or eegformer")
+    if args.model == "eegformer" and args.arm == "cross":
+        sys.exit("--model eegformer: the cross-patient arm is not part of update 8")
     if args.loss != "weighted" and args.protocol != "epidenet":
         sys.exit("--loss unweighted applies to --protocol epidenet only")
     # Separate folders: the designs share job names, and a finished job is skipped.
     default_out = {("plan", "weighted"): "stage0", ("epidenet", "weighted"): "gate_check",
-                   ("epidenet", "unweighted"): "gate_check_unweighted"}[(args.protocol, args.loss)]
+                   ("epidenet", "unweighted"): "gate_check_unweighted",
+                   ("eegformer", "weighted"): "eegformer_check"}[(args.protocol, args.loss)]
+    if args.model == "eegformer" and args.protocol == "plan" and args.out is None:
+        default_out = "stage4_eegformer"
     args.out = args.out or os.path.join(ROOT, "runs", default_out)
 
     from models import SPECS
@@ -159,7 +234,7 @@ def main():
         sys.exit(f"model {args.model} has no channel set for {args.dataset}")
 
     if args.clear_claims:
-        stale = glob.glob(os.path.join(args.out, "*", "*.claim"))
+        stale = glob.glob(os.path.join(args.out, "*", "*.claim"))  # includes _pretrain/
         for c in stale:
             os.remove(c)
         print(f"cleared {len(stale)} claim file(s)", flush=True)
@@ -169,9 +244,12 @@ def main():
         to_cache = [p for pat in ds.list_patients(data_root) for p, _ in ds.usable_records(data_root, pat, channels)]
     else:
         units = ds.list_patients(data_root) if args.patients == ["all"] else args.patients
+        if args.protocol == "eegformer":
+            units = [u for u in units if u in CHECK_PATIENTS]
         to_cache = None
 
-    jobs = []
+    jobs, pre_jobs = [], []
+    pretrained = SPECS[args.model].pretrain_epochs > 0
     for unit in units:
         try:
             folds, names = build_folds(ds, data_root, args.arm, unit, channels, args.protocol)
@@ -187,14 +265,27 @@ def main():
         print(f"{unit}: {len(recs)} records, {len(folds)} folds"
               + (f" (test groups: {', '.join(names)})" if names else "")
               + f", cached in {time.perf_counter() - t0:.0f} s", flush=True)
+        if pretrained:
+            pool = pretrain_pool(ds, data_root, unit, channels, args.protocol)
+            for p in pool:
+                ds.load_record(p, args.cache, channels)
+            os.makedirs(os.path.join(args.out, "_pretrain"), exist_ok=True)
+            for s in args.seeds:
+                stem = pretrain_stem(args.out, unit, s)
+                if not os.path.exists(stem + ".json") and not os.path.exists(stem + ".claim"):
+                    pre_jobs.append((args.dataset, args.model, args.arm, args.protocol, args.loss, unit, "pretrain", s,
+                                     data_root, args.cache, args.out, args.threads, args.smoke))
         for k in (args.folds if args.folds is not None else range(len(folds))):
             for s in args.seeds:
                 stem = os.path.join(args.out, unit, f"fold{k}_seed{s}")
                 if not os.path.exists(stem + ".json") and not os.path.exists(stem + ".claim"):
                     jobs.append((args.dataset, args.model, args.arm, args.protocol, args.loss, unit, k, s, data_root, args.cache,
-                                 args.out, args.threads))
+                                 args.out, args.threads, args.smoke))
 
+    jobs = pre_jobs + jobs  # every pre-training job is handed out before any fold job
     n_proc = args.workers + args.gpu_workers
+    if pre_jobs:
+        print(f"{len(pre_jobs)} pre-training jobs first", flush=True)
     print(f"{len(jobs)} jobs ({args.dataset}, {args.model}, {args.arm} arm, {args.protocol} protocol, {args.loss} loss) on {args.workers} CPU worker(s) + "
           f"{args.gpu_workers} {args.gpu_device} worker(s), {args.threads} thread(s) each", flush=True)
     if not jobs:
@@ -207,8 +298,9 @@ def main():
         devices.put("cpu")
     t0 = time.perf_counter()
     with ctx.Pool(n_proc, initializer=_init_worker, initargs=(devices,)) as pool:
-        for i, (unit, k, s, dev, status, dt) in enumerate(pool.imap_unordered(_job, jobs), 1):
-            print(f"[{i}/{len(jobs)}] {unit} fold {k} seed {s} ({dev}): {status.splitlines()[0]} in {dt:.0f} s "
+        for i, (unit, k, s, dev, status, dt) in enumerate(pool.imap_unordered(_job, jobs, chunksize=1), 1):
+            what = "pre-training" if k == "pretrain" else f"fold {k}"
+            print(f"[{i}/{len(jobs)}] {unit} {what} seed {s} ({dev}): {status.splitlines()[0]} in {dt:.0f} s "
                   f"(elapsed {(time.perf_counter() - t0) / 60:.1f} min)", flush=True)
             if status.startswith("FAILED"):
                 print(status, flush=True)

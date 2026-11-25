@@ -1,6 +1,6 @@
 # Second detector family: EEGformer (assessment before any implementation or registration)
 
-**Status:** working notes, 2026-11-24. Nothing implemented in `src/`, nothing registered, nothing run. Decisions marked **[decide]** need the user (and ideally Aryal at the Dec 15 meeting) before update 8 is drafted.
+**Status:** working notes, 2026-11-24; updated 2026-11-25. Decided 2026-11-25: protocol option (b), the paper's pre-training then fine-tuning. Implemented (`src/eegformer.py`, `pipeline.pretrain`, `pipeline.run_eegformer_check`, tests) and drafted as update 8 (`prereg/OSF_UPDATE_8.md`); one workstation script runs everything (`scripts/run_eegformer_ws.sh`). Nothing registered or run beyond 2-epoch smoke tests.
 
 ## Why EEGformer
 

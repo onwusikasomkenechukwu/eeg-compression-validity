@@ -434,3 +434,120 @@ def test_siena_bipolar18_matches_ahlawat_montage():
     assert siena._find(labels, "EEG Fp2") == 1 and siena._find(labels, "EEG Cz") == 2
     with pytest.raises(KeyError):
         siena._find(labels, "EEG O1")
+
+
+# --- EEGformer (update 8) --------------------------------------------------------------------
+
+def test_eegformer_matches_table_i():
+    from eegformer import EEGformer
+    m = EEGformer()
+    assert m.S == 81                                                   # 2048 -> 409 -> 81
+    assert sum(p.numel() for p in m.parameters()) == 50594             # the paper: 50.6 K
+    assert m.conv0(torch.zeros(1, 4, 2048)).shape == (1, 32, 409)
+    assert m(torch.zeros(3, 4, 2048)).shape == (3, 2)
+
+
+@pytest.fixture(scope="module")
+def trained_eegformer():
+    from eegformer import EEGformer
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    m = EEGformer()
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+
+    def batch(n):
+        x, y = _synthetic(n, gen)
+        return torch.cat([x, x], dim=-1)[:, 0], y                      # (n, 4, 2048)
+    for _ in range(80):
+        x, y = batch(32)
+        opt.zero_grad()
+        torch.nn.functional.cross_entropy(m(x), y).backward()
+        opt.step()
+    return m.eval(), batch(128)[0]
+
+
+def test_eegformer_quantization_reaches_the_attention_matmuls(trained_eegformer):
+    from quantize import Float16Sim, MatMul
+    m, x = trained_eegformer
+    with torch.no_grad():
+        ref = m(x)
+        d = lambda a: (a[:, 1] - a[:, 0]).numpy()  # noqa: E731
+        assert d(ref).std() > 1.0
+        fq = {b: FakeQuant(m, b).calibrate(x) for b in (16, 8, 4)}
+        assert {i for (mod, i) in fq[8].ranges if isinstance(mod, MatMul)} == {0, 1}   # both operands
+        err = {b: (q(x) - ref).abs().mean().item() for b, q in fq.items()}
+        assert err[16] < 1e-2 and err[16] < err[8] < err[4]
+        assert 0 < (Float16Sim(m)(x) - ref).abs().max().item() < 5e-2
+        qat = QAT(m, 8).calibrate(x).eval()
+        assert torch.allclose(qat(x), fq[8](x), atol=1e-4)              # QAT starts as sim8
+        q = OnnxInt8(m, x, n_calib=128)
+        assert (ref - q(x, fp32=True)).abs().max().item() < 1e-3
+        assert np.corrcoef(d(q(x)), d(ref))[0, 1] > 0.98
+    assert q.quantized_ops["MatMul"]["int8_input"] >= 2                 # the attention products run in INT8
+    assert q.quantized_ops["Conv"]["int8_input"] == 2
+
+
+def _fast_eegformer(monkeypatch):
+    import dataclasses
+    import models
+    spec = dataclasses.replace(models.SPECS["eegformer"], max_epochs=3, pretrain_epochs=3, patience=2,
+                               pretrain_patience=2)
+    monkeypatch.setitem(models.SPECS, "eegformer", spec)
+
+
+def test_eegformer_pretrains_then_fine_tunes_and_rescores(monkeypatch, tmp_path):
+    import pipeline
+    from records import make_folds
+    _fast_eegformer(monkeypatch)
+    monkeypatch.setattr(pipeline, "QAT_MAX_EPOCHS", 2)
+    quiet = dict(threads=1, log=lambda m: None)
+    s_pre, a_pre = pipeline.pretrain(["s0", "s2"], None, _TinyDataset, seed=0, **quiet)
+    assert s_pre["pool_records"] == 2 and s_pre["training"]["epochs"] <= 3
+    np.savez_compressed(tmp_path / "pre.npz", **a_pre)
+    pre = dict(np.load(tmp_path / "pre.npz"))
+    folds = make_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
+    with pytest.raises(ValueError):
+        pipeline.run_fold(folds, 0, None, _TinyDataset, model="eegformer", seed=0, **quiet)
+    summary, saved = pipeline.run_fold(folds, 0, None, _TinyDataset, model="eegformer", seed=0, pretrained=pre, **quiet)
+    assert summary["model"] == "eegformer" and summary["pretrained"]["pool_records"] == 2
+    assert summary["onnx_fp32_max_abs_logit_diff"] < 1e-3
+    assert set(summary["thresholds"]) == set(pipeline.VARIANTS)
+    w = saved["w_fp32__qkv.weight"]
+    _, saved2 = pipeline.run_fold(folds, 0, None, _TinyDataset, model="eegformer", seed=0, pretrained=pre, **quiet)
+    assert np.array_equal(w, saved2["w_fp32__qkv.weight"])              # repeatable
+    np.savez_compressed(tmp_path / "job.npz", **saved)
+    res, out = pipeline.rescore_fold(folds, 0, None, _TinyDataset, np.load(tmp_path / "job.npz"), model="eegformer",
+                                     seed=0, **quiet)
+    assert res["checks"]["norm_mean_max_abs_diff"] == 0 and res["checks"]["test_fp32_max_abs_diff"] < 1e-5
+
+
+def test_eegformer_check_protocol_and_event_metrics(monkeypatch):
+    import pipeline
+    from records import loocv_seizure_folds
+    _fast_eegformer(monkeypatch)
+    g = pipeline.Geometry(pipeline.SPECS["eegformer"])
+    # Event metrics on a known prediction: 600 s record, seizure 200-260 s, windows every 2 s.
+    x = np.zeros((4, 600 * FS), np.float16)
+    starts = window_starts(x.shape[1], g.win, 2 * FS)
+    ends = (starts + g.win) / FS
+    pred = np.zeros(len(starts), bool)
+    sz = seizure_fraction(starts, g.win, [(200.0, 260.0)], x.shape[1]) >= 0.5
+    first = np.flatnonzero(sz)[0]
+    pred[first + 3:first + 8] = True                                    # detected after 3 seizure windows
+    pred[(ends > 270) & (ends < 290)] = True                            # within 15 min after the end: ignored
+    pred[(ends > 570) & (ends < 580)] = True                            # 310-320 s after the end: ignored
+    m = pipeline.eegformer_event_metrics((x, [(200.0, 260.0)], 600.0), pred, g)
+    assert m["detected"] == 1 and m["latencies_s"] == [(3 + 1) * 2 + 2]  # 2-of-3 vote adds one window
+    assert m["fp_events"] == 0
+    x2 = np.zeros((4, 1500 * FS), np.float16)
+    s2 = window_starts(x2.shape[1], g.win, 2 * FS)
+    e2 = (s2 + g.win) / FS
+    p2 = ((e2 > 1200) & (e2 < 1220)) | ((e2 > 1300) & (e2 < 1310))     # two events after the 15 min
+    m2 = pipeline.eegformer_event_metrics((x2, [(200.0, 260.0)], 1500.0), p2, g)
+    assert m2["fp_events"] == 2 and m2["detected"] == 0
+    # The protocol runs end to end on the tiny dataset.
+    folds = loocv_seizure_folds([(p, bool(ev)) for p, ev in _TinyDataset.RECS.items()])
+    _, pre = pipeline.pretrain(["s0"], None, _TinyDataset, seed=0, threads=1, log=lambda m: None)
+    s, a = pipeline.run_eegformer_check(folds, 1, None, _TinyDataset, pre, seed=0, threads=1, log=lambda m: None)
+    assert s["protocol"] == "eegformer" and s["test_records"] == ["s1"] and s["train_records"] == 2
+    assert s["check"][0]["seizures"] == 1 and len(a["test_fp32"]) == len(window_starts(600 * FS, g.win, 2 * FS))

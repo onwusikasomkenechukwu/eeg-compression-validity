@@ -15,6 +15,11 @@ training windows:
   - Float16Sim: FP16 weights and layer inputs (rounded to half precision), FP32 accumulation;
     exploratory, added after registration.
 
+Activation-by-activation products (EEGformer's q k^T and attention-weighted values) are MatMul
+modules: the simulated paths quantize (or round to FP16) both of their inputs, per tensor,
+like a layer's input; they have no weights. LayerNorm, softmax and GELU stay in float in the
+simulated paths. CNN models contain no MatMul, so their results are unchanged.
+
 Quantization-aware training (QAT), the plan's retrained condition, compared only against
 the FP32 seed band because retraining mixes quantization with training noise:
   - QAT(bits): fine-tunes the job's own FP32 model (Jacob et al. 2018; Krishnamoorthi 2018)
@@ -33,6 +38,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn.utils import parametrize
+
+
+class MatMul(nn.Module):
+    """a @ b as a module, so quantization hooks see both operands."""
+
+    def forward(self, a, b):
+        return torch.matmul(a, b)
 
 
 CONV = (nn.Conv1d, nn.Conv2d)
@@ -88,17 +100,18 @@ class FakeQuant(nn.Module):
             m.weight.data = _quant_weight(m.weight.data, bits)
         self.ranges = {}
         self._calibrating = False
-        for m in self.layers:
+        for m in self.layers + [m for m in self.net.modules() if isinstance(m, MatMul)]:
             m.register_forward_pre_hook(self._hook)
 
     def _hook(self, module, inputs):
-        x = inputs[0]
+        n = len(inputs) if isinstance(module, MatMul) else 1   # a layer: its input; a MatMul: both operands
         if self._calibrating:
-            lo, hi = self.ranges.get(module, (np.inf, -np.inf))
-            self.ranges[module] = (min(lo, x.min().item()), max(hi, x.max().item()))
+            for i in range(n):
+                x = inputs[i]
+                lo, hi = self.ranges.get((module, i), (np.inf, -np.inf))
+                self.ranges[(module, i)] = (min(lo, x.min().item()), max(hi, x.max().item()))
             return None
-        lo, hi = self.ranges[module]
-        return (_quant_act(x, lo, hi, self.act_bits),)
+        return tuple(_quant_act(inputs[i], *self.ranges[(module, i)], self.act_bits) for i in range(n))             + tuple(inputs[n:])
 
     @torch.no_grad()
     def calibrate(self, X, batch=1024):
@@ -130,6 +143,8 @@ class Float16Sim(nn.Module):
                 if m.bias is not None:
                     m.bias.data = _to_half(m.bias.data)
                 m.register_forward_pre_hook(lambda module, inputs: (_to_half(inputs[0]),))
+            elif isinstance(m, MatMul):
+                m.register_forward_pre_hook(lambda module, inputs: tuple(_to_half(t) for t in inputs))
 
     def forward(self, x):
         return self.net(x)
@@ -170,19 +185,31 @@ class QAT(nn.Module):
             m.register_buffer("act_lo", torch.tensor(np.inf))
             m.register_buffer("act_hi", torch.tensor(-np.inf))
             m.register_forward_pre_hook(self._hook)
+        for m in [m for m in self.net.modules() if isinstance(m, MatMul)]:  # both operands, no weight
+            for i in (0, 1):
+                m.register_buffer(f"act_lo{i}", torch.tensor(np.inf))
+                m.register_buffer(f"act_hi{i}", torch.tensor(-np.inf))
+            m.register_forward_pre_hook(self._hook)
 
-    def _hook(self, module, inputs):
-        x = inputs[0]
+    def _quant(self, x, lo, hi):
         lo_b, hi_b = x.detach().min(), x.detach().max()
         if self._calibrating:
-            module.act_lo.copy_(torch.minimum(module.act_lo, lo_b))
-            module.act_hi.copy_(torch.maximum(module.act_hi, hi_b))
-            return None
+            lo.copy_(torch.minimum(lo, lo_b))
+            hi.copy_(torch.maximum(hi, hi_b))
+            return x
         if self.training:
             m = self.momentum
-            module.act_lo.mul_(m).add_((1 - m) * lo_b)
-            module.act_hi.mul_(m).add_((1 - m) * hi_b)
-        return (_quant_act_t(x, module.act_lo, module.act_hi, self.bits),)
+            lo.mul_(m).add_((1 - m) * lo_b)
+            hi.mul_(m).add_((1 - m) * hi_b)
+        return _quant_act_t(x, lo, hi, self.bits)
+
+    def _hook(self, module, inputs):
+        if isinstance(module, MatMul):
+            out = tuple(self._quant(inputs[i], getattr(module, f"act_lo{i}"), getattr(module, f"act_hi{i}"))
+                        for i in (0, 1))
+        else:
+            out = (self._quant(inputs[0], module.act_lo, module.act_hi),)
+        return None if self._calibrating else out
 
     @torch.no_grad()
     def calibrate(self, X, batch=1024):
@@ -194,6 +221,24 @@ class QAT(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+def quantized_op_report(path):
+    """Per operator type of a QDQ model: how many nodes read an input that passed through INT8
+    (a DequantizeLinear output) and how many read float inputs only. An INT8 input does not mean
+    an integer kernel: ONNX Runtime runs Conv, MatMul and Gemm on integers, and may run others
+    (LayerNormalization, Softmax) in float between quantize/dequantize pairs. For EEGformer this
+    shows which operations see INT8-rounded data (its authors run all of them in integer)."""
+    import onnx
+    g = onnx.load(path).graph
+    from_dq = {o for n in g.node if n.op_type == "DequantizeLinear" for o in n.output}
+    report = {}
+    for n in g.node:
+        if n.op_type in ("QuantizeLinear", "DequantizeLinear"):
+            continue
+        key = "int8_input" if any(i in from_dq for i in n.input) else "float_input"
+        report.setdefault(n.op_type, {"int8_input": 0, "float_input": 0})[key] += 1
+    return report
 
 
 class OnnxInt8:
@@ -228,6 +273,7 @@ class OnnxInt8:
             quantize_static(pre, int8, Reader(), quant_format=QuantFormat.QDQ, per_channel=True,
                             activation_type=QuantType.QInt8, weight_type=QuantType.QInt8,
                             calibrate_method=CalibrationMethod.MinMax)
+            self.quantized_ops = quantized_op_report(int8)
             opts = ort.SessionOptions()
             opts.intra_op_num_threads = torch.get_num_threads()
             self.sess = ort.InferenceSession(int8, opts, providers=["CPUExecutionProvider"])

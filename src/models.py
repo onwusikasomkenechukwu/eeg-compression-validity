@@ -10,6 +10,14 @@
     sigmoid (the same model class; it lets every model share the scoring code), and this
     pipeline's preprocessing (causal 0.5-40 Hz band-pass, decimation to 128 Hz, training-set
     standardization) instead of his per-record z-score with gap removal.
+  - eegformer (second detector family, update 8): the compact transformer of Busia et al.
+    (2024), reimplemented from Table I (src/eegformer.py); 4 temporal channels, 8 s windows
+    at 256 Hz. Two-phase training as in the paper: subject-independent pre-training on the
+    seizure records of every other patient (never the test patient or the same person),
+    then subject-specific fine-tuning inside this plan's folds. Adam, learning rate 5e-5,
+    batch 16; at most 100 pre-training and 50 fine-tuning epochs (the paper's counts), with
+    the best epoch kept and early stopping after 20 epochs without improvement (a compute
+    bound the paper does not state).
 """
 from dataclasses import dataclass
 from typing import Callable
@@ -17,6 +25,7 @@ from typing import Callable
 import torch.nn as nn
 import torch.nn.functional as F
 
+from eegformer import EEGformer
 from epidenet import EpiDeNet
 
 
@@ -53,8 +62,11 @@ class ModelSpec:
     layout: str                        # "2d": (B, 1, C, T); "1d": (B, C, T)
     channels: dict                     # dataset name -> channel-set name
     lr: float
-    max_epochs: int
+    max_epochs: int                    # FP32 training (fine-tuning when pretrain_epochs > 0)
     patience: int
+    batch: int = 256                   # FP32 training and QAT fine-tuning
+    pretrain_epochs: int = 0           # > 0: subject-independent pre-training first (pipeline.pretrain)
+    pretrain_patience: int = 0
 
 
 SPECS = {
@@ -63,4 +75,7 @@ SPECS = {
                           lr=1e-3, max_epochs=300, patience=10),
     "ahlawat": ModelSpec("ahlawat", lambda c: AhlawatCNN(n_channels=c), win_s=8, decim=2, layout="1d",
                          channels={"chbmit": "bipolar18", "siena": "bipolar18"}, lr=1e-4, max_epochs=200, patience=20),
+    "eegformer": ModelSpec("eegformer", lambda c: EEGformer(n_channels=c), win_s=8, decim=1, layout="1d",
+                           channels={"chbmit": "temporal4", "siena": "temporal4"}, lr=5e-5, max_epochs=50,
+                           patience=20, batch=16, pretrain_epochs=100, pretrain_patience=20),
 }
