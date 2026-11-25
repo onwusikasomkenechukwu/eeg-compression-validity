@@ -36,6 +36,9 @@ def load_runs(runs, patients):
         s = json.load(open(path))
         if patients and s["patient"] not in patients:
             continue
+        # The scores sit next to the JSON. In the cross arm that folder is the unit ("xpat"),
+        # not the test patient that s["patient"] names.
+        s["_npz"] = path[:-5] + ".npz"
         by[s["patient"]][s["seed"]].append(s)
     return by
 
@@ -46,7 +49,7 @@ def pooled_specificity(runs_dir, patient, jobs):
     import numpy as np
     neg = correct = 0
     for s in jobs:
-        a = np.load(os.path.join(runs_dir, patient, f"fold{s['fold']}_seed{s['seed']}.npz"))
+        a = np.load(s["_npz"])
         bg = a["test_labels"] == 0
         neg += int(bg.sum())
         correct += int((bg & (a["test_fp32"] <= s["thresholds"]["fp32"])).sum())  # alarm only above the threshold

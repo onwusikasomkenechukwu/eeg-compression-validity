@@ -1,6 +1,6 @@
 # OSF registration update 7: repeatability check of Siena jobs run under GPU memory pressure
 
-**Status:** ready to submit. Both runs finished (160/160 and 70/70, no failures; 5 and 12 allocator warnings); submit before any Siena result is inspected. Same mechanics as before: append each paragraph to the end of its field.
+**Status:** submitted on OSF on 2026-11-24, before any Siena result was inspected. Outcome (2026-11-24): all 6 reruns (run one job per GPU, no allocator warnings) identical to the originals, array by array; reruns deleted. Both runs finished (160/160 and 70/70, no failures; 5 and 12 allocator warnings); submit before any Siena result is inspected. Same mechanics as before: append each paragraph to the end of its field.
 
 ## Justification tab
 

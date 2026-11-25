@@ -2,9 +2,9 @@
 
 Does post-training quantization move a seizure detector along the false-alarm / latency trade-off that its window-level metrics cannot see?
 
-## Status (2026-11-23)
+## Status (2026-11-24)
 
-Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with five updates: update 1 (2026-11-10, `0bafefa`) after the FP32 sanity gate failed; update 2 (2026-11-10, `819d4ad`) moving the confirmatory test to Ahlawat's model; update 3 (2026-11-17, `58d8708`) restarting that run on a GPU workstation; update 4 (2026-11-17) recording the workstation details; update 5 (2026-11-19) adding a repeatability check of jobs run under GPU memory pressure. Registered text: `prereg/OSF_FORM.md`, `prereg/OSF_UPDATE_FORM.md`, `prereg/OSF_UPDATE_AHLAWAT.md`, `prereg/OSF_UPDATE_WORKSTATION.md`, `prereg/OSF_UPDATE_4.md`, `prereg/OSF_UPDATE_5.md`.
+Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with seven updates: update 1 (2026-11-10, `0bafefa`) after the FP32 sanity gate failed; update 2 (2026-11-10, `819d4ad`) moving the confirmatory test to Ahlawat's model; update 3 (2026-11-17, `58d8708`) restarting that run on a GPU workstation; update 4 (2026-11-17) recording the workstation details; update 5 (2026-11-19) adding a repeatability check of jobs run under GPU memory pressure; update 6 (2026-11-23, `3ff0469`) registering a replication on Siena; update 7 (2026-11-24) applying the memory-pressure check to the Siena jobs. Registered text: `prereg/OSF_FORM.md`, `prereg/OSF_UPDATE_FORM.md`, `prereg/OSF_UPDATE_AHLAWAT.md`, `prereg/OSF_UPDATE_WORKSTATION.md`, `prereg/OSF_UPDATE_4.md`, `prereg/OSF_UPDATE_5.md`, `prereg/OSF_UPDATE_6.md`, `prereg/OSF_UPDATE_7.md`.
 
 | Step | Result | Where |
 |---|---|---|
@@ -17,6 +17,9 @@ Pre-registered on OSF (2026-10-25, code at `3a9b77d`), with five updates: update
 | W4A8 and FP16 from Stage 0 weights (exploratory) | W4A8 +0.50 s, FP16 0.00 s; no sensitivity change at any cap | `runs/stage0_bitwidths/` |
 | Confirmatory test: Ahlawat's model, 24 patients x 5 seeds, 690 models (updates 2-5) | Fidelity check passed (87/120 patient-seeds). **H1 not supported**: INT8 excess latency -0.13 s (95% CI -0.30 to 0.00); 4-bit +16.17 s; INT8 unchanged at every cap. 18 jobs rerun under update 5: all identical | `runs/stage1_ahlawat_ws/` |
 | W4A8 and FP16 of the confirmatory models (exploratory) | W4A8 0.00 s, FP16 0.00 s; no sensitivity change at any cap | `runs/stage1_ahlawat_ws_bitwidths/` |
+| Siena replication, patient-specific arm: 8 patients x 5 seeds, 160 models (update 6) | **Fidelity check failed** (12/40 patient-seeds, 27 needed), so exploratory. INT8 +5.50 s inside a wide FP32 seed band (-42.2 to 42.0 s); 4-bit censored in 25/40; INT8 paired sensitivity change 0.000 at 0.5 and 1 per 24 h, -0.10 at 2. 1 job rerun under update 7: identical | `runs/stage2_siena/` |
+| Siena, cross-patient arm: leave one of 14 patients out, 70 models (update 6) | **Fidelity check failed** (34/70, 47 needed), so exploratory. INT8 never reaches FP32's false-alarm rate in 28/70 (10 of 14 patients), so its pooled value is undefined; INT8 paired sensitivity change 0.000 at every cap. 5 jobs rerun under update 7: identical | `runs/stage2_siena_cross/` |
+| W4A8 and FP16 of the Siena patient-specific models (exploratory) | W4A8 +0.55 s, FP16 0.00 s | `runs/stage2_siena_bitwidths/` |
 
 The laptop's partial CPU run of the confirmatory test (236 jobs, stopped under update 3) is set aside in `runs/stage1_ahlawat/`, not part of any result.
 
