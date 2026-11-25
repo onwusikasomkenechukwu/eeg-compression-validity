@@ -1,0 +1,12 @@
+train windows 27808 (2528 seizure), val windows 2305 (20 seizure, window grid)
+  epoch 1: val loss 0.6297 (best 0.6297, 1.3 s)
+  epoch 11: val loss 0.5415 (best 0.4802, 1.3 s)
+  epoch 21: val loss 0.3869 (best 0.2079, 1.3 s)
+  epoch 31: val loss 0.1928 (best 0.1532, 1.3 s)
+  epoch 41: val loss 0.5839 (best 0.1532, 1.3 s)
+  epoch 48: val loss 0.4917 (best 0.1532, 1.3 s)
+  epoch 1: val loss 0.7507 (best 0.7507, 1.9 s)
+  epoch 11: val loss 0.1785 (best 0.1785, 1.9 s)
+  epoch 21: val loss 0.4627 (best 0.1559, 1.9 s)
+  epoch 23: val loss 0.2947 (best 0.1559, 1.9 s)
+ok

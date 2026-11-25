@@ -1,0 +1,2 @@
+checks: {'norm_mean_max_abs_diff': 0.0, 'test_fp32_max_abs_diff': 0.0}
+ok

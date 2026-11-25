@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/home/rtx-3090/eeg-compression-validity/scripts/analyze_frontier.py", line 210, in <module>
+    main()
+  File "/home/rtx-3090/eeg-compression-validity/scripts/analyze_frontier.py", line 103, in main
+    spec, ok = pooled_specificity(args.runs, patient, runs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rtx-3090/eeg-compression-validity/scripts/analyze_frontier.py", line 49, in pooled_specificity
+    a = np.load(os.path.join(runs_dir, patient, f"fold{s['fold']}_seed{s['seed']}.npz"))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rtx-3090/venvs/eegcv/lib/python3.12/site-packages/numpy/lib/_npyio_impl.py", line 454, in load
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'runs/stage2_siena_cross/PN00/fold0_seed0.npz'
