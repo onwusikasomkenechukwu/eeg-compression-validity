@@ -1,0 +1,61 @@
+pmid,year,query,eeg,dl,compress,cmp_float,event_eval,doi,title
+8812076,1996,Q1,1,1,1,0,0,10.1006/cbmr.1996.0022,Detection of seizure activity in EEG by an artificial neural network: a preliminary study.
+12662595,1996,Q1,1,1,1,0,0,10.1016/0893-6080(96)00032-9,An Adaptive Structure Neural Networks with Application to EEG Automatic Seizure Detection.
+12008131,2002,Q1,0,0,1,0,0,10.1016/s0731-7085(01)00684-7,LC determination of oxcarbazepine and its active metabolite in human serum.
+18002491,2007,Q2,1,0,0,0,0,10.1109/IEMBS.2007.4352825,Algorithm for AEEG data selection leading to wireless and long term epilepsy monitoring.
+25058705,2014,Q1,0,1,1,0,0,10.1162/NECO_a_00644,Fragility in dynamic networks: application to neural networks in the epileptic cortex.
+25571501,2014,Q1,0,1,1,0,1,10.1109/EMBC.2014.6945133,Instability detector of a fragile neural network: application to seizure detection in epilepsy.
+24968296,2015,Q1,0,0,1,0,1,10.1109/TBCAS.2014.2318592,An 81.6 μW FastICA processor for epileptic seizure detection.
+25784851,2015,Q1,0,0,1,0,0,10.3389/fnins.2015.00058,Closed-loop control of a fragile network: application to seizure-like dynamics of an epilepsy model.
+26737931,2015,Q2,1,1,0,0,1,10.1109/EMBC.2015.7320031,An ultra low power feature extraction and classification system for wearable seizure detection.
+28335804,2017,Q1,1,0,1,0,0,10.1186/s40101-017-0136-8,Symbolic time series analysis of electroencephalographic (EEG) epileptic seizure and brain dynamics with eye-open and eye-closed subjects during resting states.
+30324037,2018,Q2,1,1,0,0,0,10.1109/JTEHM.2018.2867864,Low-Power and Low-Cost Dedicated Bit-Serial Hardware Neural Network for Epileptic Seizure Prediction System.
+30369447,2018,Q1,1,0,1,0,0,10.1109/TNSRE.2018.2877820,A New Unsupervised Detector of High-Frequency Oscillations in Accurate Localization of Epileptic Seizure Onset Zones.
+29113719,2018,Q1,1,0,1,0,0,10.1016/j.clinph.2017.08.036,Utilization of independent component analysis for accurate pathological ripple detection in intracranial EEG recordings recorded extra- and intra-operatively.
+30440858,2018,Q2,0,1,0,0,1,10.1109/EMBC.2018.8512735,Hardware Implementation of a Performance and Energy-optimized Convolutional Neural Network for Seizure Detection.
+30790780,2019,Q2,1,1,0,0,0,10.1088/1741-2552/ab094a,Early seizure detection for closed loop direct neurostimulation devices in epilepsy.
+32054592,2020,Q1,0,0,1,0,0,10.1109/JBHI.2020.2972286,QuPWM: Feature Extraction Method for Epileptic Spike Classification.
+32746347,2020,Q1,1,0,1,0,0,10.1109/TBCAS.2020.3004544,ResOT: Resource-Efficient Oblique Trees for Neural Signal Classification.
+33357222,2020,Q2,1,1,0,0,0,10.1186/s12911-020-01307-7,Automated detection of activity onset after postictal generalized EEG suppression.
+32498996,2020,Q2,1,1,0,0,0,10.1016/j.artmed.2020.101813,Multimodal data analysis of epileptic EEG and rs-fMRI via deep learning and edge computing.
+33011647,2020,Q2,1,1,1,0,1,10.1016/j.compbiomed.2020.104004,Scalable and energy efficient seizure detection based on direct use of compressively-sensed EEG data on an ultra low power multi-core architecture.
+34181550,2021,Q1,1,1,1,1,1,10.1109/TBCAS.2021.3092744,RISC-V CNN Coprocessor for Real-Time Epilepsy Detection in Wearable Application.
+35317247,2021,Q2,1,1,0,0,0,10.3389/fneur.2021.703797,A Comparison of Energy-Efficient Seizure Detectors for Implantable Neurostimulation Devices.
+34201480,2021,Q2,1,1,0,0,1,10.3390/bios11070203,Epileptic Seizure Detection on an Ultra-Low-Power Embedded RISC-V Processor Using a Convolutional Neural Network.
+34035249,2021,Q2,1,1,0,0,0,10.1038/s41467-021-23342-2,An electronic neuromorphic system for real-time detection of high frequency oscillations (HFO) in intracranial EEG.
+33794507,2021,Q1,1,1,1,0,1,10.1088/1741-2552/abf473,Edge deep learning for neural implants: a case study of seizure detection and prediction.
+35654375,2022,Q1,0,0,0,0,1,10.1016/j.neuroimage.2022.119342,Developmental organization of neural dynamics supporting auditory perception.
+35737626,2022,Q1,1,1,1,0,1,10.1109/TBCAS.2022.3185584,Seizure Detection and Prediction by Parallel Memristive Convolutional Neural Networks.
+36086510,2022,Q1,0,1,1,0,0,10.1109/EMBC48229.2022.9872006,Tiny CNN for Seizure Prediction in Wearable Biomedical Devices.
+35110665,2022,Q2,1,1,0,0,0,10.1038/s41598-022-05883-8,A neuromorphic spiking neural network detects epileptic high frequency oscillations in the scalp EEG.
+37461668,2023,Q1,0,0,1,0,0,10.1101/2023.07.03.547549,Activity-Induced MeCP2 Phosphorylation Regulates Retinogeniculate Synapse Refinement.
+37593369,2023,Q1,0,0,1,0,0,10.1109/ner52421.2023.10123896,Linear feedback control of spreading dynamics in stochastic nonlinear network models: epileptic seizures.
+36417737,2023,Q1,1,1,1,0,0,10.1109/JBHI.2022.3223970,LightSeizureNet: A Lightweight Deep Learning Model for Real-Time Epileptic Seizure Detection.
+38268711,2023,Q2,1,1,0,0,0,10.3389/fnins.2023.1303564,Efficient and generalizable cross-patient epileptic seizure detection through a spiking neural network.
+37144338,2023,Q2,0,0,0,0,1,10.1088/1741-2552/acd029,NET-TEN: a silicon neuromorphic network for low-latency detection of seizures in local field potentials.
+37072932,2023,Q1,1,0,1,0,0,10.1111/cns.14224,Preferential pruning of inhibitory synapses by microglia contributes to alteration of the balance between excitatory and inhibitory synapses in the hippocampus in temporal lobe epilepsy.
+38692453,2024,Q1,0,0,1,0,0,10.1016/j.neuropharm.2024.109968,Contribution of microglia to the epileptiform activity that results from neonatal hypoxia.
+38555723,2024,Q1,1,1,1,0,0,10.1016/j.neunet.2024.106267,Cosine convolutional neural network and its application for seizure detection.
+38864575,2024,Q1,1,0,1,0,0,10.1142/S0129065724500473,Unsupervised EEG-Based Seizure Anomaly Detection with Denoising Diffusion Probabilistic Models.
+39413626,2024,Q2,1,1,0,0,1,10.1016/j.compbiomed.2024.109225,Real-time sub-milliwatt epilepsy detection implemented on a spiking neural network edge inference processor.
+38261487,2024,Q2,1,1,0,0,1,10.1109/TBCAS.2024.3357509,Reducing False Alarms in Wearable Seizure Detection With EEGformer: A Compact Transformer Model for MCUs.
+38365732,2024,Q1,1,1,0,0,0,10.1186/s12967-024-04945-x,Technological Vanguard: the outstanding performance of the LTY-CNN model for the early prediction of epileptic seizures.
+41337036,2025,Q1,1,1,1,0,0,10.1109/EMBC58623.2025.11254245,Automated and Expert-Level Identification of Interictal Epileptiform Discharges with AI-Powered methods.
+40030347,2025,Q1,1,1,1,0,0,10.1109/TBCAS.2024.3505423,Hardware Optimization and Implementation of a 16-Channel Neural Tree Classifier for On-Chip Closed-Loop Neuromodulation.
+39993329,2025,Q1,1,0,1,0,0,10.1088/1741-2552/adb998,Sparse knowledge sharing (SKS) for privacy-preserving domain incremental seizure detection.
+39412966,2025,Q2,1,0,0,0,1,10.1109/TBCAS.2024.3481160,BrainForest: Neuromorphic Multiplier-Less Bit-Serial Weight-Memory-Optimized 1024-Tree Brain-State Classification Processor.
+39196752,2025,Q2,0,1,0,0,0,10.1109/TBCAS.2024.3450896,Low-Power and Low-Cost AI Processor With Distributed-Aggregated Classification Architecture for Wearable Epilepsy Seizure Detection.
+41336943,2025,Q2,1,1,0,0,0,10.1109/EMBC58623.2025.11252697,FEMBA: Efficient and Scalable EEG Analysis with a Bidirectional Mamba Foundation Model.
+40586847,2025,Q2,1,1,0,0,1,10.1111/epi.18521,The impact of EEG preprocessing parameters on ultra-low-power seizure detection.
+41310045,2025,Q2,1,1,0,0,1,10.1038/s41598-025-29393-5,Seamless integration for enhanced seizure prediction using HybridConvMobileNet on Typhoon HIL.
+40354815,2025,Q1,1,0,1,1,1,10.1088/1741-2552/add76f,Memory optimized random forest classifier for EEG seizure detection in implantable monitoring and closed-loop neurostimulation devices.
+39137083,2025,Q1,0,1,1,1,0,10.1109/TBCAS.2024.3442250,RVDLAHA: An RISC-V DLA Hardware Architecture for On-Device Real-Time Seizure Detection and Personalization in Wearable Applications.
+40335613,2025,Q2,1,1,0,0,0,10.1038/s41598-025-99272-6,Event driven neural network on a mixed signal neuromorphic processor for EEG based epileptic seizure detection.
+41254886,2026,Q1,0,1,1,0,0,10.1142/S0129065725500777,A Novel Morlet Convolutional Neural Network.
+41926031,2026,Q1,1,0,0,0,0,10.1007/s10439-026-04097-7,Three-Phase Seizure Segmentation in Stereotactic EEG Using Envelope-Based Multivariate Changepoint Analysis.
+41774634,2026,Q1,1,0,1,0,1,10.1109/JBHI.2026.3669510,A 6G-Enabled Hierarchical Contrastive Learning Framework for Multi-Scale Medical Time Series Analysis.
+41851280,2026,Q2,1,1,0,0,1,10.1038/s41598-026-44536-y,PSD-LW-DCN: a generalizable power spectral density based lightweight deep convolutional neural network for seizure detection.
+41576423,2026,Q2,1,1,0,0,0,10.1088/2057-1976/ae3ca4,On-device single channel EEG classification on Android smartphones using lightweight machine learning models.
+42185493,2026,Q2,1,1,0,0,0,10.1038/s41598-026-54785-6,Lightweight deep learning model for nonconvulsive status epilepticus diagnosis using EEG time-frequency analysis.
+42672041,2026,Q1,0,0,1,0,0,10.1109/TBME.2026.3729285,Analysis of the Impact of Hardware Front-End Limitations on Vagus Nerve Electroneurogram-Based Seizure Detection.
+41396749,2026,Q2,1,1,0,0,0,10.1109/JBHI.2025.3643602,Memory-Efficient Intrinsic Gating Adaptation for Enhanced On-Device Epilepsy Diagnosis.
